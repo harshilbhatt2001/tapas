@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, config, ... }:
 
 let
   vault = "/mnt/gen5-btrfs/sid/Projects/Tapas";
@@ -6,7 +6,7 @@ let
   # Shared ground rules for every Rust agent.
   rules = ''
     Project: tapas, a Rust 2024 ratatui TUI training-week planner with Google Calendar and
-    Google Health sync. Repo: /mnt/gen5-ntfs/ws/tapas.
+    Google Health sync. Repo: /mnt/gen5-btrfs/ws/tapas.
 
     Ground rules:
     - Toolchain comes from devenv.sh. There is no cargo on PATH: run every cargo command as
@@ -33,13 +33,10 @@ in
   # Same derivation as the flake: `devenv build outputs.tapas`.
   outputs.tapas = pkgs.callPackage ./nix/package.nix { };
 
-  # The repo sits on an ntfs-3g mount without exec bits, so build scripts in ./target
-  # cannot run. Build outside it.
-  enterShell = ''
-    export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/tapas/target"
+  # Runs the working tree from any directory.
+  scripts.tapas.exec = ''
+    cargo run --quiet --manifest-path ${config.devenv.root}/Cargo.toml -- "$@"
   '';
-
-  scripts.tapas.exec = ''cargo run --quiet -- "$@"'';
 
   # Build the flake package and show what changed in its closure since the last run.
   scripts.pkg-diff.exec = ''

@@ -60,8 +60,12 @@ enum Command {
 enum GoogleCommand {
     /// Install a Google "Desktop app" OAuth client JSON.
     Setup { client_secret: PathBuf },
-    /// Open the browser consent page and cache tokens.
-    Login,
+    /// Open the browser consent pages (one per API) and cache tokens.
+    Login {
+        /// Log in to just one API.
+        #[arg(long, value_parser = ["calendar", "health"])]
+        only: Option<String>,
+    },
     /// Replace a plan's events in the tapas Google calendar.
     Push {
         /// Plan name or id; the active plan by default.
@@ -168,16 +172,21 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
             println!("Installed OAuth client at {}", dest.display());
             println!("Next: tapas google login");
         }
-        GoogleCommand::Login => {
+        GoogleCommand::Login { only } => {
             let secret = paths.client_secret_file();
             if !secret.exists() {
                 bail!("no Google OAuth client yet; run `tapas google setup <client_secret.json>`");
             }
-            auth::login(&secret, &paths.tokens_file()).await?;
-            println!(
-                "Logged in; tokens cached at {}",
-                paths.tokens_file().display()
-            );
+            // Separate consents: the Health API rejects tokens that also carry Calendar scopes.
+            for api in auth::Api::ALL {
+                if only.as_deref().is_some_and(|o| o != api.name()) {
+                    continue;
+                }
+                println!("Logging in to Google {}", api.name());
+                let tokens = sync::tokens_file(paths, api);
+                auth::login(&secret, api, &tokens).await?;
+                println!("Logged in; tokens cached at {}", tokens.display());
+            }
         }
         GoogleCommand::Push { plan, start, weeks } => {
             let plan = pick_plan(store, plan.as_deref())?.clone();

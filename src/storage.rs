@@ -43,7 +43,13 @@ impl Paths {
         self.config_dir.join("client_secret.json")
     }
 
-    pub fn tokens_file(&self) -> PathBuf {
+    /// OAuth token cache of one Google API (`calendar`, `health`).
+    pub fn tokens_file(&self, api: &str) -> PathBuf {
+        self.config_dir.join(format!("tokens-{api}.json"))
+    }
+
+    /// Pre-split cache that held one token for every scope; the Health API rejects it.
+    pub fn legacy_tokens_file(&self) -> PathBuf {
         self.config_dir.join("tokens.json")
     }
 }

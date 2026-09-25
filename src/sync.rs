@@ -1,5 +1,7 @@
 //! Glue between the core model and the Google clients, shared by the CLI and the TUI.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Days, NaiveDate, Utc, Weekday};
 
@@ -7,7 +9,7 @@ use crate::{
     calc,
     export::{self, ExportEvent, ExportOpts},
     google::{
-        auth::{self, ACTIVITY_SCOPE, Auth, METRICS_SCOPE},
+        auth::{self, Api, Auth},
         calendar::{self, CalEvent, PushReport},
         health::{self, Workout},
     },
@@ -84,20 +86,40 @@ pub fn planned_vs_done(
     out
 }
 
-/// Fail with a pointer to the right command when Google is not set up yet.
-pub fn require_login(paths: &Paths) -> Result<()> {
+/// Token cache of `api`. A pre-split `tokens.json` still works for Calendar, so it becomes
+/// the Calendar cache.
+pub fn tokens_file(paths: &Paths, api: Api) -> PathBuf {
+    let file = paths.tokens_file(api.name());
+    let legacy = paths.legacy_tokens_file();
+    if api == Api::Calendar && !file.exists() && legacy.exists() {
+        // Best effort: if the rename fails the user is asked to log in again.
+        let _ = std::fs::rename(&legacy, &file);
+    }
+    file
+}
+
+pub fn is_logged_in(paths: &Paths, api: Api) -> bool {
+    auth::is_logged_in(&tokens_file(paths, api))
+}
+
+/// Fail with a pointer to the right command when Google is not set up yet for `api`.
+pub fn require_login(paths: &Paths, api: Api) -> Result<()> {
     if !paths.client_secret_file().exists() {
         bail!("no Google OAuth client yet; run `tapas google setup <client_secret.json>`");
     }
-    if !auth::is_logged_in(&paths.tokens_file()) {
-        bail!("not logged in to Google; run `tapas google login`");
+    if !is_logged_in(paths, api) {
+        bail!(
+            "not logged in to Google {}; run `tapas google login --only {}`",
+            api.name(),
+            api.name()
+        );
     }
     Ok(())
 }
 
-async fn authenticator(paths: &Paths) -> Result<Auth> {
-    require_login(paths)?;
-    auth::authenticator(&paths.client_secret_file(), &paths.tokens_file()).await
+async fn authenticator(paths: &Paths, api: Api) -> Result<Auth> {
+    require_login(paths, api)?;
+    auth::authenticator(&paths.client_secret_file(), &tokens_file(paths, api)).await
 }
 
 /// IANA name of the local time zone.
@@ -112,13 +134,13 @@ pub async fn push_plan(
     plan: &Plan,
     opts: &ExportOpts,
 ) -> Result<PushReport> {
-    require_login(paths)?;
+    require_login(paths, Api::Calendar)?;
     let events = cal_events(&export::events(store, plan, opts));
     if events.is_empty() {
         bail!("nothing to push");
     }
     let tz = local_tz()?;
-    let auth = authenticator(paths).await?;
+    let auth = authenticator(paths, Api::Calendar).await?;
     calendar::push(
         &auth,
         &store.export.calendar_name,
@@ -133,14 +155,14 @@ pub async fn push_plan(
 
 /// Latest weight in kg from Google Health over the last 90 days.
 pub async fn latest_weight(paths: &Paths) -> Result<Option<(f64, DateTime<Utc>)>> {
-    let auth = authenticator(paths).await?;
-    let token = auth::access_token(&auth, &[METRICS_SCOPE]).await?;
+    let auth = authenticator(paths, Api::Health).await?;
+    let token = auth::access_token(&auth, Api::Health.scopes()).await?;
     health::latest_weight_kg(&token, 90).await
 }
 
 /// Google Health workouts of the week starting `monday`.
 pub async fn week_workouts(paths: &Paths, monday: NaiveDate) -> Result<Vec<Workout>> {
-    let auth = authenticator(paths).await?;
-    let token = auth::access_token(&auth, &[ACTIVITY_SCOPE]).await?;
+    let auth = authenticator(paths, Api::Health).await?;
+    let token = auth::access_token(&auth, Api::Health.scopes()).await?;
     health::workouts(&token, monday, monday + Days::new(6)).await
 }

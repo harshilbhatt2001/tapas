@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     export::{self, ExportOpts},
-    google::{auth, calendar::PushReport, health::Workout},
+    google::{auth::Api, calendar::PushReport, health::Workout},
     sync,
 };
 
@@ -122,7 +122,7 @@ fn write(app: &mut App, ext: &str) {
 }
 
 fn push(app: &mut App) {
-    if let Err(e) = sync::require_login(&app.paths) {
+    if let Err(e) = sync::require_login(&app.paths, Api::Calendar) {
         app.error(format!("{e:#}"));
         return;
     }
@@ -159,7 +159,7 @@ pub fn on_pushed(app: &mut App, plan_id: &str, res: Result<PushReport>) {
 }
 
 fn fetch_workouts(app: &mut App) {
-    if let Err(e) = sync::require_login(&app.paths) {
+    if let Err(e) = sync::require_login(&app.paths, Api::Health) {
         app.error(format!("{e:#}"));
         return;
     }
@@ -192,13 +192,28 @@ pub fn google_state(app: &App) -> Line<'static> {
             Span::styled("Google: not set up. ", Style::new().fg(WARN)),
             Span::raw("Run `tapas google setup <client_secret.json>`, then `tapas google login`."),
         ])
-    } else if !auth::is_logged_in(&app.paths.tokens_file()) {
-        Line::from(vec![
-            Span::styled("Google: not logged in. ", Style::new().fg(WARN)),
-            Span::raw("Run `tapas google login` in a terminal."),
-        ])
     } else {
-        Line::styled("Google: logged in.", Style::new().fg(OK))
+        let mut spans = vec![Span::raw("Google: ")];
+        let mut missing = Vec::new();
+        for api in Api::ALL {
+            let ok = sync::is_logged_in(&app.paths, api);
+            if !ok {
+                missing.push(api.name());
+            }
+            let (mark, color) = if ok { ("✓", OK) } else { ("✗", WARN) };
+            spans.push(Span::styled(
+                format!("{} {mark}  ", api.name()),
+                Style::new().fg(color),
+            ));
+        }
+        if let [one] = missing[..] {
+            spans.push(Span::raw(format!(
+                "Run `tapas google login --only {one}` in a terminal."
+            )));
+        } else if !missing.is_empty() {
+            spans.push(Span::raw("Run `tapas google login` in a terminal."));
+        }
+        Line::from(spans)
     }
 }
 

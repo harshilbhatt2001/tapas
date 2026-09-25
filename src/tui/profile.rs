@@ -16,7 +16,7 @@ use super::{
     export::google_state,
     widgets::{DIM, Field, Form, LINE},
 };
-use crate::sync;
+use crate::{google::auth::Api, sync};
 
 pub fn on_key(app: &mut App, k: KeyEvent) {
     match k.code {
@@ -36,7 +36,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             app.open_form(form, FormKind::Profile);
         }
         KeyCode::Char('w') => {
-            if let Err(e) = sync::require_login(&app.paths) {
+            if let Err(e) = sync::require_login(&app.paths, Api::Health) {
                 app.error(format!("{e:#}"));
                 return;
             }

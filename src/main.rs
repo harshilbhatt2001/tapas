@@ -2,7 +2,8 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use chrono::{Local, NaiveDate};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
 use google_calendar3::yup_oauth2::read_application_secret;
 use tapas::{
     calc,
@@ -27,7 +28,7 @@ enum Command {
     Export {
         format: Format,
         /// Plan name or id; the active plan by default.
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(plan_names))]
         plan: Option<String>,
         /// Monday of the first week (YYYY-MM-DD); next Monday by default.
         #[arg(long)]
@@ -65,7 +66,7 @@ enum GoogleCommand {
     /// Replace a plan's events in the tapas Google calendar.
     Push {
         /// Plan name or id; the active plan by default.
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(plan_names))]
         plan: Option<String>,
         /// Monday of the first week (YYYY-MM-DD); next Monday by default.
         #[arg(long)]
@@ -99,6 +100,7 @@ enum Format {
 }
 
 fn main() -> Result<()> {
+    CompleteEnv::with_factory(Cli::command).complete();
     let cli = Cli::parse();
     let paths = Paths::resolve()?;
     let mut store = storage::load(&paths)?;
@@ -241,6 +243,18 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
         }
     }
     Ok(())
+}
+
+/// Saved plan names, for shell completion of `--plan`.
+fn plan_names() -> Vec<CompletionCandidate> {
+    let Ok(store) = Paths::resolve().and_then(|p| storage::load(&p)) else {
+        return Vec::new();
+    };
+    store
+        .plans
+        .iter()
+        .map(|p| CompletionCandidate::new(&p.name))
+        .collect()
 }
 
 /// The named plan, or the active one.

@@ -81,14 +81,6 @@ fn name_query(name: &str) -> String {
     format!("name = '{escaped}' and trashed = false")
 }
 
-fn is_not_found(err: &ApiError) -> bool {
-    match err {
-        ApiError::BadRequest(v) => v["error"]["code"].as_u64() == Some(404),
-        ApiError::Failure(res) => res.status().as_u16() == 404,
-        _ => false,
-    }
-}
-
 /// Context for a failed call; a refused login becomes just the [`auth::login_hint`].
 fn api_err(err: ApiError, what: &str) -> anyhow::Error {
     if let ApiError::MissingToken(e) = &err
@@ -106,8 +98,8 @@ pub struct Drive {
 }
 
 impl Drive {
-    /// Pass an [`auth::background_authenticator`] for `Api::Calendar` so an old token that
-    /// lacks the Drive scope fails with the login hint instead of opening a browser.
+    /// Pass an [`auth::background_authenticator`] for `Api::Calendar` so a token without the
+    /// Drive scope fails with the login hint instead of opening a browser.
     pub fn new(auth: Auth) -> Result<Self> {
         let client =
             hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
@@ -150,24 +142,7 @@ impl Drive {
         }
     }
 
-    /// Current metadata, `None` when the file no longer exists.
-    pub async fn meta(&self, file_id: &str) -> Result<Option<RemoteMeta>> {
-        match self
-            .hub
-            .files()
-            .get(file_id)
-            .param("fields", FILE_FIELDS)
-            .add_scope(DRIVE_SCOPE)
-            .doit()
-            .await
-        {
-            Ok((_, file)) => RemoteMeta::try_from(file).map(Some),
-            Err(e) if is_not_found(&e) => Ok(None),
-            Err(e) => Err(api_err(e, "reading Drive file metadata")),
-        }
-    }
-
-    /// Content of exactly `revision_id`, so bytes and a prior [`Drive::meta`] always match.
+    /// Content of exactly `revision_id`, so the bytes match the head a listing reported.
     pub async fn download(&self, file_id: &str, revision_id: &str) -> Result<Vec<u8>> {
         let (res, _) = self
             .hub

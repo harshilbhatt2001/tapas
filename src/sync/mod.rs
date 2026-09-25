@@ -230,7 +230,7 @@ fn remote_device(f: &RemoteMeta) -> Option<Uuid> {
 
 /// Merge base without a common ancestor: default settings and nothing else, so every plan,
 /// item and type on either side counts as added.
-fn no_base() -> Store {
+fn empty_base() -> Store {
     Store {
         plans: Vec::new(),
         library: Library { types: Vec::new() },
@@ -418,25 +418,25 @@ pub async fn sync<R: Remote>(
         return Ok(s.finish(Outcome::Created));
     };
 
-    let tracked = |f: &RemoteMeta| {
+    let base_of = |f: &RemoteMeta| {
         state
             .as_ref()
             .filter(|st| st.file_id == f.file_id)
             .and(base.as_ref())
     };
     let unchanged = |f: &RemoteMeta| {
-        tracked(f).is_some()
+        base_of(f).is_some()
             && state
                 .as_ref()
                 .is_some_and(|st| st.base_head == f.head_revision_id)
     };
-    let empty = no_base();
+    let empty = empty_base();
     let dirty = match &base {
         Some(b) => local != b,
         None => paths.store_file.exists(),
     };
 
-    let mut work = local.clone();
+    let mut with_extras = local.clone();
     if !extras.is_empty() {
         s.warnings.push(format!(
             "found {} copies of {FILE_NAME} on Drive; merged them into the oldest",
@@ -445,19 +445,24 @@ pub async fn sync<R: Remote>(
     }
     for f in extras.iter().filter(|f| !unchanged(f)) {
         let doc = s.fetch(&f.file_id, &f.head_revision_id).await?;
-        work = s.merge(tracked(f).unwrap_or(&empty), &work, &doc, remote_device(f));
+        with_extras = s.merge(
+            base_of(f).unwrap_or(&empty),
+            &with_extras,
+            &doc,
+            remote_device(f),
+        );
     }
-    // What the extra copies held must reach the oldest one before they are deleted.
-    let changed = dirty || !extras.is_empty();
+    // Extra copies are deleted below, so what they held counts as a local change.
+    let local_changed = dirty || !extras.is_empty();
 
     let (file_id, head) = (&primary.file_id, &primary.head_revision_id);
-    let outcome = match (unchanged(primary), changed, tracked(primary)) {
+    let outcome = match (unchanged(primary), local_changed, base_of(primary)) {
         (true, false, Some(b)) => {
             record(paths, primary, b)?;
             Outcome::UpToDate
         }
         (true, true, Some(b)) => {
-            s.replace(local, work, dirty)?;
+            s.replace(local, with_extras, dirty)?;
             s.upload(file_id, head.clone(), b.clone(), local).await?;
             Outcome::Pushed
         }
@@ -471,7 +476,12 @@ pub async fn sync<R: Remote>(
         }
         (_, true, b) => {
             let doc = s.fetch(file_id, head).await?;
-            let merged = s.merge(b.unwrap_or(&empty), &work, &doc, remote_device(primary));
+            let merged = s.merge(
+                b.unwrap_or(&empty),
+                &with_extras,
+                &doc,
+                remote_device(primary),
+            );
             s.replace(local, merged, dirty)?;
             if *local == doc {
                 record(paths, primary, &doc)?;

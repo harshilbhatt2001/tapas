@@ -127,9 +127,8 @@ pub fn stamp(prev: &Store, next: &mut Store, now: DateTime<Utc>) {
         p.updated_at = h.updated_at;
         for (d, day) in p.days.iter_mut().enumerate() {
             for it in day {
-                // Only the same item on the same day counts as unchanged.
-                let was = old.and_then(|o| o.days[d].iter().find(|x| x.id == it.id));
-                restamp(was, it, now);
+                let prev_same_day = old.and_then(|o| o.days[d].iter().find(|x| x.id == it.id));
+                restamp(prev_same_day, it, now);
             }
         }
     }
@@ -286,7 +285,6 @@ impl Merger {
     ) -> Option<T> {
         let side = match (changes(base, local, remote, same), local, remote) {
             (Change::Take(side), ..) => side,
-            // Same content: the later stamp.
             (Change::Same, Some(l), Some(r)) => self.newer(l, r),
             (Change::Both, Some(l), Some(r)) => {
                 let side = self.newer(l, r);

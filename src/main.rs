@@ -9,7 +9,7 @@ use tapas::{
     calc,
     export::{self, ExportOpts},
     google::auth,
-    model::{DAYS, Plan, Store, hm},
+    model::{DAYS, Device, Plan, Store, hm},
     services,
     storage::{self, Paths},
 };
@@ -110,10 +110,10 @@ fn main() -> Result<()> {
     CompleteEnv::with_factory(Cli::command).complete();
     let cli = Cli::parse();
     let paths = Paths::resolve()?;
-    let mut store = storage::load(&paths)?;
+    let (mut store, device) = storage::load(&paths)?;
     match cli.command {
-        None => tapas::tui::run(paths, store)?,
-        Some(Command::Plans) => list_plans(&store),
+        None => tapas::tui::run(paths, store, device)?,
+        Some(Command::Plans) => list_plans(&store, &device),
         Some(Command::Export {
             format,
             plan,
@@ -122,7 +122,7 @@ fn main() -> Result<()> {
             life,
             output,
         }) => {
-            let plan = pick_plan(&store, plan.as_deref())?;
+            let plan = pick_plan(&store, &device, plan.as_deref())?;
             let opts = ExportOpts {
                 first_monday: start
                     .unwrap_or_else(|| export::next_monday(Local::now().date_naive())),
@@ -139,17 +139,16 @@ fn main() -> Result<()> {
             };
             match output {
                 Some(file) => {
-                    fs::write(&file, text)
-                        .with_context(|| format!("writing {}", file.display()))?;
+                    storage::write_atomic(&file, text.as_bytes())?;
                 }
                 None => print!("{text}"),
             }
         }
         Some(Command::Google { command }) => {
-            runtime()?.block_on(google(command, &paths, &mut store))?;
+            runtime()?.block_on(google(command, &paths, &mut store, &device))?;
         }
         Some(Command::Health { command }) => {
-            runtime()?.block_on(health(command, &paths, &mut store))?;
+            runtime()?.block_on(health(command, &paths, &mut store, &device))?;
         }
     }
     Ok(())
@@ -161,7 +160,12 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .build()?)
 }
 
-async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<()> {
+async fn google(
+    cmd: GoogleCommand,
+    paths: &Paths,
+    store: &mut Store,
+    device: &Device,
+) -> Result<()> {
     match cmd {
         GoogleCommand::Setup { client_secret } => {
             read_application_secret(&client_secret).await.with_context(|| {
@@ -170,11 +174,10 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
                     client_secret.display()
                 )
             })?;
-            fs::create_dir_all(&paths.config_dir)
-                .with_context(|| format!("creating {}", paths.config_dir.display()))?;
             let dest = paths.client_secret_file();
-            fs::copy(&client_secret, &dest)
-                .with_context(|| format!("copying to {}", dest.display()))?;
+            let bytes = fs::read(&client_secret)
+                .with_context(|| format!("reading {}", client_secret.display()))?;
+            storage::write_atomic(&dest, &bytes)?;
             println!("Installed OAuth client at {}", dest.display());
             println!("Next: tapas google login");
         }
@@ -195,7 +198,7 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
             }
         }
         GoogleCommand::Push { plan, start, weeks } => {
-            let plan = pick_plan(store, plan.as_deref())?.clone();
+            let plan = pick_plan(store, device, plan.as_deref())?.clone();
             let opts = ExportOpts {
                 first_monday: start
                     .unwrap_or_else(|| export::next_monday(Local::now().date_naive())),
@@ -214,7 +217,12 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
     Ok(())
 }
 
-async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<()> {
+async fn health(
+    cmd: HealthCommand,
+    paths: &Paths,
+    store: &mut Store,
+    device: &Device,
+) -> Result<()> {
     match cmd {
         HealthCommand::Weight { apply } => {
             let Some((kg, at)) = services::latest_weight(paths).await? else {
@@ -234,7 +242,7 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
         HealthCommand::Week { start, all } => {
             let monday = services::week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
             let workouts = services::week_workouts(paths, monday).await?;
-            let plan = store.plan();
+            let plan = store.plan_or_first(device.active_plan.as_deref());
             let days = services::planned_vs_done(
                 &store.library,
                 plan,
@@ -273,7 +281,7 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
 
 /// Saved plan names, for shell completion of `--plan`.
 fn plan_names() -> Vec<CompletionCandidate> {
-    let Ok(store) = Paths::resolve().and_then(|p| storage::load(&p)) else {
+    let Ok((store, _)) = Paths::resolve().and_then(|p| storage::load(&p)) else {
         return Vec::new();
     };
     store
@@ -284,17 +292,17 @@ fn plan_names() -> Vec<CompletionCandidate> {
 }
 
 /// The named plan, or the active one.
-fn pick_plan<'a>(store: &'a Store, name: Option<&str>) -> Result<&'a Plan> {
+fn pick_plan<'a>(store: &'a Store, device: &Device, name: Option<&str>) -> Result<&'a Plan> {
     match name {
         Some(n) => store
             .plan_by_name(n)
             .with_context(|| format!("no plan named {n:?}")),
-        None => Ok(store.plan()),
+        None => Ok(store.plan_or_first(device.active_plan.as_deref())),
     }
 }
 
-fn list_plans(store: &Store) {
-    let active = &store.plan().id;
+fn list_plans(store: &Store, device: &Device) {
+    let active = &store.plan_or_first(device.active_plan.as_deref()).id;
     for p in &store.plans {
         let hours = calc::summary(&store.library, p).hours;
         let mark = if &p.id == active { "*" } else { " " };

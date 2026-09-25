@@ -28,10 +28,10 @@ const NOTES: usize = 4;
 const MAX_DUR: u32 = 720;
 
 pub fn open(app: &mut App, id: &str) {
-    let Some((d, i)) = app.store.plan().find(id) else {
+    let Some((d, i)) = app.plan().find(id) else {
         return;
     };
-    let it = &app.store.plan().days[d][i];
+    let it = &app.plan().days[d][i];
     let Some(t) = app.store.library.get(&it.type_key) else {
         app.error(format!(
             "Type {:?} is no longer in the library",
@@ -79,8 +79,8 @@ pub fn on_change(app: &App, form: &mut Form, id: &str, field: usize) {
 }
 
 fn item<'a>(app: &'a App, id: &str) -> Option<&'a Item> {
-    let (d, i) = app.store.plan().find(id)?;
-    Some(&app.store.plan().days[d][i])
+    let (d, i) = app.plan().find(id)?;
+    Some(&app.plan().days[d][i])
 }
 
 /// The item as the form currently describes it, and the target day.
@@ -116,12 +116,8 @@ fn edited(app: &App, form: &Form, id: &str) -> Result<(Item, usize), String> {
 
 pub fn apply(app: &mut App, form: &Form, id: &str) -> Result<(), String> {
     let (new, to) = edited(app, form, id)?;
-    let (d, i) = app
-        .store
-        .plan()
-        .find(id)
-        .ok_or("The session no longer exists")?;
-    let plan = app.store.plan_mut();
+    let (d, i) = app.plan().find(id).ok_or("The session no longer exists")?;
+    let plan = app.plan_mut();
     if d == to {
         plan.days[d][i] = new;
     } else {
@@ -131,7 +127,6 @@ pub fn apply(app: &mut App, form: &Form, id: &str) -> Result<(), String> {
     app.commit();
     app.day = to;
     app.card = app
-        .store
         .plan()
         .sorted_day(to)
         .iter()

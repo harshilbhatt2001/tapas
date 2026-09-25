@@ -74,6 +74,25 @@ Plans live in the platform data dir (`~/.local/share/tapas` on Linux), the OAuth
 tokens in the config dir (`~/.config/tapas`). Set `TAPAS_HOME` to use
 `$TAPAS_HOME/{data,config}` instead.
 
+### Sharing plans between machines
+
+Set `TAPAS_STORE` to a file inside a folder that Syncthing, Dropbox or a Drive desktop client
+keeps in sync, on every machine:
+
+```sh
+export TAPAS_STORE=~/Sync/tapas/store.json
+```
+
+Only the store (plans, library, profile, export settings) moves there. It wins over
+`TAPAS_HOME`. The OAuth client, tokens and `device.json` (which plan this machine has open)
+stay in the local dirs, so no credentials land in the synced folder. tapas replaces the file
+in one rename, so the sync tool never picks up a half-written store.
+
+Caveat: tapas does not notice the conflict copies a sync tool makes when two machines edit
+before syncing (for example `store.sync-conflict-*.json` or "conflicted copy"). Edit on one
+machine at a time, and merge or delete such copies by hand. A store written by a newer tapas
+is refused rather than overwritten; update tapas on that machine.
+
 ## CLI
 
 ```

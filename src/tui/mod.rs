@@ -28,15 +28,19 @@ pub use app::App;
 use app::{Background, Modal, Screen};
 use widgets::{DIM, LINE, WARN, message_popup};
 
-use crate::{calc, model::Store, storage::Paths};
+use crate::{
+    calc,
+    model::{Device, Store},
+    storage::Paths,
+};
 
 /// Run the TUI until the user quits. Mouse capture is released on exit and on panic.
-pub fn run(paths: Paths, store: Store) -> Result<()> {
+pub fn run(paths: Paths, store: Store, device: Device) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let (tx, rx) = mpsc::channel();
-    let mut app = App::new(paths, store);
+    let mut app = App::new(paths, store, device);
     app.day = week::today_index();
     app.clamp();
     app.bg = Some(Background {
@@ -107,7 +111,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let [left, bib] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(34)]).areas(area);
-    let plan = app.store.plan();
+    let plan = app.plan();
     let s = calc::summary(&app.store.library, plan);
     f.render_widget(
         Paragraph::new(vec![
@@ -119,7 +123,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" plan ", Style::new().fg(DIM)),
                 Span::raw(plan.name.clone()).bold(),
                 Span::styled(
-                    format!("  ({} of {})", app.store.active + 1, app.store.plans.len()),
+                    format!("  ({} of {})", app.active() + 1, app.store.plans.len()),
                     Style::new().fg(DIM),
                 ),
             ]),
@@ -279,6 +283,7 @@ mod tests {
         App::new(
             Paths::under(std::path::Path::new("/nonexistent/tapas")),
             store,
+            Device::default(),
         )
     }
 

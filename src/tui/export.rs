@@ -1,8 +1,8 @@
 //! Screen 5: file export, Google Calendar push and Google Health workouts.
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate, Weekday};
 use directories::UserDirs;
 use ratatui::{
@@ -21,7 +21,7 @@ use super::{
 use crate::{
     export::{self, ExportOpts},
     google::{auth::Api, calendar::PushReport, health::Workout},
-    services, storage,
+    services,
 };
 
 pub fn opts(app: &App) -> ExportOpts {
@@ -109,7 +109,7 @@ fn write(app: &mut App, ext: &str) {
             export::to_google_csv(&events, o.weeks)?
         };
         let path = out_dir().join(file_name(&plan.name, ext));
-        storage::write_atomic(&path, text.as_bytes())?;
+        fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
         Ok(path)
     })();
     match res {

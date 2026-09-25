@@ -8,6 +8,7 @@ readme = "README.md"
 keywords = ["tui", "training", "planner", "calendar", "fitness"]
 categories = ["command-line-utilities"]
 rust-version = "1.98"
+repository = "https://github.com/harshilbhatt2001/tapas"
 
 [dependencies]
 anyhow = "1"

@@ -11,8 +11,8 @@ Google Health. It is a [ratatui](https://ratatui.rs) port of a single-page web a
 With Nix (flakes enabled, nothing else needed):
 
 ```sh
-nix profile install github:<owner>/tapas   # install
-nix run github:<owner>/tapas               # run without installing
+nix profile install github:harshilbhatt2001/tapas   # install
+nix run github:harshilbhatt2001/tapas               # run without installing
 nix profile install .                      # from a local checkout
 ```
 

@@ -1,0 +1,609 @@
+{
+  "version": 3,
+  "profile": {
+    "weight": 73.0,
+    "base": {
+      "kcal": 2600.0,
+      "P": 150.0,
+      "C": 315.0,
+      "F": 80.0
+    },
+    "updated_at": "1970-01-01T00:00:00Z"
+  },
+  "library": {
+    "types": [
+      {
+        "key": "swim",
+        "label": "Swim",
+        "color": "#5B9BE0",
+        "kind": "swim",
+        "category": "train",
+        "start": "07:00",
+        "counted": true,
+        "efforts": [
+          {
+            "key": "technique",
+            "label": "Technique",
+            "rpe": 3.0,
+            "met": 5.0,
+            "dur": 45,
+            "legs": false
+          },
+          {
+            "key": "easy",
+            "label": "Easy aerobic",
+            "rpe": 4.0,
+            "met": 6.0,
+            "dur": 45,
+            "legs": false
+          },
+          {
+            "key": "threshold",
+            "label": "Threshold sets",
+            "rpe": 7.0,
+            "met": 9.5,
+            "dur": 50,
+            "legs": false
+          },
+          {
+            "key": "long",
+            "label": "Long swim",
+            "rpe": 5.0,
+            "met": 7.0,
+            "dur": 60,
+            "legs": false
+          },
+          {
+            "key": "openwater",
+            "label": "Open water",
+            "rpe": 5.0,
+            "met": 7.5,
+            "dur": 45,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "bike",
+        "label": "Bike",
+        "color": "#E0A145",
+        "kind": "bike",
+        "category": "train",
+        "start": "18:00",
+        "counted": true,
+        "efforts": [
+          {
+            "key": "recovery",
+            "label": "Recovery spin",
+            "rpe": 2.0,
+            "met": 4.0,
+            "dur": 45,
+            "legs": false
+          },
+          {
+            "key": "z2",
+            "label": "Endurance Z2",
+            "rpe": 3.0,
+            "met": 6.8,
+            "dur": 75,
+            "legs": false
+          },
+          {
+            "key": "tempo",
+            "label": "Tempo",
+            "rpe": 6.0,
+            "met": 8.5,
+            "dur": 75,
+            "legs": false
+          },
+          {
+            "key": "intervals",
+            "label": "Intervals",
+            "rpe": 8.0,
+            "met": 10.5,
+            "dur": 60,
+            "legs": false
+          },
+          {
+            "key": "long",
+            "label": "Long ride",
+            "rpe": 4.0,
+            "met": 7.5,
+            "dur": 180,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "run",
+        "label": "Run",
+        "color": "#5DB585",
+        "kind": "run",
+        "category": "train",
+        "start": "07:00",
+        "counted": true,
+        "efforts": [
+          {
+            "key": "runwalk",
+            "label": "Run/walk",
+            "rpe": 3.0,
+            "met": 6.0,
+            "dur": 25,
+            "legs": false
+          },
+          {
+            "key": "easy",
+            "label": "Easy",
+            "rpe": 4.0,
+            "met": 8.3,
+            "dur": 35,
+            "legs": false
+          },
+          {
+            "key": "tempo",
+            "label": "Tempo",
+            "rpe": 7.0,
+            "met": 10.0,
+            "dur": 45,
+            "legs": false
+          },
+          {
+            "key": "intervals",
+            "label": "Intervals",
+            "rpe": 8.0,
+            "met": 11.0,
+            "dur": 45,
+            "legs": false
+          },
+          {
+            "key": "long",
+            "label": "Long run",
+            "rpe": 5.0,
+            "met": 9.0,
+            "dur": 75,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "gym",
+        "label": "Gym",
+        "color": "#A286DD",
+        "kind": "gym",
+        "category": "train",
+        "start": "07:00",
+        "counted": true,
+        "efforts": [
+          {
+            "key": "heavy",
+            "label": "Heavy strength",
+            "rpe": 6.0,
+            "met": 5.0,
+            "dur": 55,
+            "legs": true
+          },
+          {
+            "key": "maint",
+            "label": "Maintenance",
+            "rpe": 5.0,
+            "met": 4.5,
+            "dur": 40,
+            "legs": false
+          },
+          {
+            "key": "tendon",
+            "label": "Tendon and core",
+            "rpe": 3.0,
+            "met": 3.5,
+            "dur": 20,
+            "legs": false
+          },
+          {
+            "key": "mobility",
+            "label": "Mobility",
+            "rpe": 2.0,
+            "met": 2.5,
+            "dur": 25,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "brick",
+        "label": "Brick",
+        "color": "#DB7A63",
+        "kind": "brick",
+        "category": "train",
+        "start": "09:00",
+        "counted": true,
+        "efforts": [
+          {
+            "key": "easy",
+            "label": "Easy brick",
+            "rpe": 4.0,
+            "met": 8.0,
+            "dur": 90,
+            "legs": false
+          },
+          {
+            "key": "race",
+            "label": "Race-pace brick",
+            "rpe": 7.0,
+            "met": 9.5,
+            "dur": 120,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "padel",
+        "label": "Padel",
+        "color": "#E27BAE",
+        "kind": "padel",
+        "category": "train",
+        "start": "11:30",
+        "counted": false,
+        "efforts": [
+          {
+            "key": "social",
+            "label": "Social game",
+            "rpe": 5.0,
+            "met": 6.0,
+            "dur": 90,
+            "legs": false
+          },
+          {
+            "key": "match",
+            "label": "Competitive match",
+            "rpe": 7.0,
+            "met": 7.5,
+            "dur": 90,
+            "legs": false
+          },
+          {
+            "key": "drills",
+            "label": "Coaching or drills",
+            "rpe": 4.0,
+            "met": 5.0,
+            "dur": 60,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "work",
+        "label": "Work",
+        "color": "#8E9AA6",
+        "kind": "work",
+        "category": "life",
+        "start": "09:00",
+        "counted": false,
+        "efforts": [
+          {
+            "key": "home",
+            "label": "From home",
+            "rpe": 0.0,
+            "met": 1.0,
+            "dur": 480,
+            "legs": false
+          },
+          {
+            "key": "office",
+            "label": "At the office",
+            "rpe": 0.0,
+            "met": 1.0,
+            "dur": 480,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "commute",
+        "label": "Commute",
+        "color": "#8E9AA6",
+        "kind": "commute",
+        "category": "life",
+        "start": "07:30",
+        "counted": false,
+        "efforts": [
+          {
+            "key": "transit",
+            "label": "Train or car",
+            "rpe": 0.0,
+            "met": 1.3,
+            "dur": 60,
+            "legs": false
+          },
+          {
+            "key": "walk",
+            "label": "Walk",
+            "rpe": 1.0,
+            "met": 3.5,
+            "dur": 30,
+            "legs": false
+          },
+          {
+            "key": "bike",
+            "label": "By bike",
+            "rpe": 2.0,
+            "met": 6.8,
+            "dur": 30,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "key": "rest",
+        "label": "Recovery",
+        "color": "#56BDB8",
+        "kind": "rest",
+        "category": "rest",
+        "start": "20:00",
+        "counted": false,
+        "efforts": [
+          {
+            "key": "off",
+            "label": "Rest day",
+            "rpe": 0.0,
+            "met": 1.0,
+            "dur": 0,
+            "legs": false
+          },
+          {
+            "key": "mobility",
+            "label": "Stretch and foam roll",
+            "rpe": 1.0,
+            "met": 2.5,
+            "dur": 20,
+            "legs": false
+          },
+          {
+            "key": "sleep",
+            "label": "Early night",
+            "rpe": 0.0,
+            "met": 1.0,
+            "dur": 0,
+            "legs": false
+          }
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  "plans": [
+    {
+      "id": "cead166b-dc3a-4c05-b79e-714cccd25f54",
+      "name": "Starter",
+      "days": [
+        [
+          {
+            "id": "b26fa720-19ba-4dda-b131-3dca4bc8b445",
+            "type": "commute",
+            "effort": "transit",
+            "start": "07:30",
+            "dur": 60,
+            "notes": "DH → AMS",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "586bd3df-db43-4977-8e57-8a837a1d853c",
+            "type": "work",
+            "effort": "office",
+            "start": "08:30",
+            "dur": 510,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "0f96d6e1-2418-40a3-8f7c-e97b0d31653b",
+            "type": "commute",
+            "effort": "transit",
+            "start": "17:06",
+            "dur": 90,
+            "notes": "AMS → home",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "0e32aae1-d2ba-4d68-a7eb-f0446911c789",
+            "type": "run",
+            "effort": "runwalk",
+            "start": "19:00",
+            "dur": 25,
+            "notes": "10 × 1 min run / 1 min walk",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "id": "afb8d1fe-27dc-46ef-b0e8-6bc53a0eaafb",
+            "type": "gym",
+            "effort": "heavy",
+            "start": "07:00",
+            "dur": 55,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "ccc586a2-2e1f-46ee-80be-60dc89122016",
+            "type": "work",
+            "effort": "home",
+            "start": "09:00",
+            "dur": 480,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "7809096b-562b-4104-99b3-21b4664069c7",
+            "type": "swim",
+            "effort": "technique",
+            "start": "18:30",
+            "dur": 45,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "id": "3ea8116f-3c6e-4faf-8655-751b4ac0eea4",
+            "type": "run",
+            "effort": "runwalk",
+            "start": "07:00",
+            "dur": 25,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "9d36d8a1-a78a-49b1-8786-800cb5d642af",
+            "type": "work",
+            "effort": "home",
+            "start": "09:00",
+            "dur": 480,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "c538ea17-a22f-49cb-80ab-101892aedea9",
+            "type": "bike",
+            "effort": "z2",
+            "start": "17:30",
+            "dur": 75,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "id": "4adfa4c3-5cc0-4faa-8eaa-d0e1d7dd69de",
+            "type": "commute",
+            "effort": "transit",
+            "start": "07:30",
+            "dur": 60,
+            "notes": "DH → AMS",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "f2ed1427-05fd-4d2c-a5b2-9e3eda8bafa4",
+            "type": "work",
+            "effort": "office",
+            "start": "08:30",
+            "dur": 570,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "c5db6593-8b02-4963-8216-6503278e7f9d",
+            "type": "commute",
+            "effort": "transit",
+            "start": "18:06",
+            "dur": 90,
+            "notes": "AMS → home",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "04d1a533-d83b-4e47-8925-ec8afe13c0f7",
+            "type": "rest",
+            "effort": "mobility",
+            "start": "20:00",
+            "dur": 20,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "id": "7a3374fb-a85b-4c26-9ccd-dbe00ddaa14d",
+            "type": "gym",
+            "effort": "maint",
+            "start": "07:00",
+            "dur": 40,
+            "notes": "Upper body and core, no heavy legs before Saturday",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "e8a1c933-5302-409c-8e6c-7c4731e63185",
+            "type": "work",
+            "effort": "home",
+            "start": "09:00",
+            "dur": 480,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "b9cb0d1b-a3a3-4b35-9172-6e329e97f6a0",
+            "type": "swim",
+            "effort": "technique",
+            "start": "18:00",
+            "dur": 45,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "id": "b880e5f8-fb4a-4318-a6ed-5ffd5a349515",
+            "type": "bike",
+            "effort": "long",
+            "start": "09:00",
+            "dur": 240,
+            "notes": "Ride block toward Nov 8",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "id": "93269028-d1b2-4b8e-88d2-5404b7e402f2",
+            "type": "run",
+            "effort": "runwalk",
+            "start": "10:00",
+            "dur": 25,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "55bb4703-3965-408d-b4d7-702c6cc29253",
+            "type": "padel",
+            "effort": "social",
+            "start": "11:30",
+            "dur": 90,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "fcecff6d-4f92-4811-b6ea-7be86db34819",
+            "type": "swim",
+            "effort": "technique",
+            "start": "16:00",
+            "dur": 45,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          },
+          {
+            "id": "0e622b36-24d2-4d63-aec2-bca07a2ac792",
+            "type": "gym",
+            "effort": "tendon",
+            "start": "17:00",
+            "dur": 20,
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
+          }
+        ]
+      ],
+      "updated_at": "1970-01-01T00:00:00Z"
+    }
+  ],
+  "export": {
+    "include_life": false,
+    "weeks": 1,
+    "calendar_name": "Training",
+    "calendar_id": null,
+    "updated_at": "1970-01-01T00:00:00Z"
+  }
+}

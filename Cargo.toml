@@ -10,6 +10,16 @@ categories = ["command-line-utilities"]
 rust-version = "1.98"
 repository = "https://github.com/harshilbhatt2001/tapas"
 
+# Only the criterion targets are benches: libtest rejects criterion flags such as
+# `--save-baseline`.
+[lib]
+bench = false
+
+[[bin]]
+name = "tapas"
+path = "src/main.rs"
+bench = false
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -36,6 +46,7 @@ tui-popup = "0.7"
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1"
 
 [profile.release]
@@ -46,3 +57,24 @@ strip = true
 pedantic = { level = "warn", priority = -1 }
 # An application: the library exists for tests, so `# Errors` sections are noise.
 missing_errors_doc = "allow"
+
+# Criterion benches; see benches/ and the `bench` devenv script.
+[[bench]]
+name = "calc"
+harness = false
+
+[[bench]]
+name = "render"
+harness = false
+
+[[bench]]
+name = "storage"
+harness = false
+
+[[bench]]
+name = "export"
+harness = false
+
+[[bench]]
+name = "sync"
+harness = false

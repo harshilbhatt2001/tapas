@@ -14,12 +14,15 @@ use google_calendar3::yup_oauth2::{
 use google_calendar3::{hyper_rustls, hyper_util};
 
 pub const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.app.created";
+/// Files tapas creates in the hidden Drive appDataFolder, used for store sync.
+pub const DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive.appdata";
 pub const ACTIVITY_SCOPE: &str =
     "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
 pub const METRICS_SCOPE: &str =
     "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
 /// A Google API with its own consent and token cache: the Health API rejects tokens that
-/// also carry another API's scopes (`DISALLOWED_OAUTH_SCOPES`).
+/// also carry another API's scopes (`DISALLOWED_OAUTH_SCOPES`). Drive rides on the Calendar
+/// consent and token cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Api {
     Calendar,
@@ -40,7 +43,7 @@ impl Api {
     #[must_use]
     pub fn scopes(self) -> &'static [&'static str] {
         match self {
-            Api::Calendar => &[CALENDAR_SCOPE],
+            Api::Calendar => &[CALENDAR_SCOPE, DRIVE_SCOPE],
             Api::Health => &[ACTIVITY_SCOPE, METRICS_SCOPE],
         }
     }
@@ -83,8 +86,60 @@ impl InstalledFlowDelegate for BrowserDelegate {
     }
 }
 
+/// Refuses the consent flow so background calls never prompt. In `Interactive` mode yup-oauth2
+/// aborts on this `Err`; `HTTPRedirect` would ignore it and wait for a redirect.
+struct NoPromptDelegate(Api);
+
+impl InstalledFlowDelegate for NoPromptDelegate {
+    fn present_user_url<'a>(
+        &'a self,
+        _url: &'a str,
+        _need_code: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+        Box::pin(async move { Err(login_hint(self.0)) })
+    }
+}
+
+/// Why a non-interactive token request failed and how to fix it.
+#[must_use]
+pub fn login_hint(api: Api) -> String {
+    let name = api.name();
+    format!(
+        "Google {name} needs a new login (no saved token, a missing scope, or the refresh \
+         failed): run `tapas google login --only {name}`"
+    )
+}
+
 /// Build an authenticator from a Google "Desktop app" client JSON, caching tokens at `tokens`.
+/// A missing or insufficient token opens the browser consent flow.
 pub async fn authenticator(secret: &Path, tokens: &Path) -> Result<Auth> {
+    build(
+        secret,
+        tokens,
+        InstalledFlowReturnMethod::HTTPRedirect,
+        Box::new(BrowserDelegate),
+    )
+    .await
+}
+
+/// Like [`authenticator`], but never prompts: a saved refresh token refreshes silently, anything
+/// else fails with [`login_hint`]. For the TUI and background calls.
+pub async fn background_authenticator(secret: &Path, api: Api, tokens: &Path) -> Result<Auth> {
+    build(
+        secret,
+        tokens,
+        InstalledFlowReturnMethod::Interactive,
+        Box::new(NoPromptDelegate(api)),
+    )
+    .await
+}
+
+async fn build(
+    secret: &Path,
+    tokens: &Path,
+    method: InstalledFlowReturnMethod,
+    delegate: Box<dyn InstalledFlowDelegate>,
+) -> Result<Auth> {
     let mut app_secret = read_application_secret(secret)
         .await
         .with_context(|| format!("reading OAuth client {}", secret.display()))?;
@@ -93,11 +148,11 @@ pub async fn authenticator(secret: &Path, tokens: &Path) -> Result<Auth> {
         .build(connector()?);
     InstalledFlowAuthenticator::with_client(
         app_secret,
-        InstalledFlowReturnMethod::HTTPRedirect,
+        method,
         CustomHyperClientBuilder::from(client),
     )
     .persist_tokens_to_disk(tokens)
-    .flow_delegate(Box::new(BrowserDelegate))
+    .flow_delegate(delegate)
     .build()
     .await
     .context("building OAuth authenticator")

@@ -202,9 +202,8 @@ mod tests {
         assert_eq!(fs::read_to_string(&paths.store_file).unwrap(), "{ not json");
     }
 
-    /// A fresh device gets a stable id: the device file is written on first load.
     #[test]
-    fn missing_file_gives_default() {
+    fn first_load_gives_default_store_and_saves_the_device() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let (s, device) = load(&paths).unwrap();

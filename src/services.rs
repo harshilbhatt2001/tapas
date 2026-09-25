@@ -274,22 +274,20 @@ pub fn sync_off(paths: &Paths) -> Option<String> {
 }
 
 /// Host of the OAuth token endpoint, which every sync reaches first.
-const PROBE: &str = "oauth2.googleapis.com:443";
+const TOKEN_ENDPOINT: &str = "oauth2.googleapis.com:443";
 
 /// Whether Google accepts a TCP connection within 3 s.
 pub async fn online() -> bool {
-    let connect = tokio::net::TcpStream::connect(PROBE);
+    let connect = tokio::net::TcpStream::connect(TOKEN_ENDPOINT);
     matches!(
         tokio::time::timeout(Duration::from_secs(3), connect).await,
         Ok(Ok(_))
     )
 }
 
-/// Sort a failed sync into offline, login needed or another error. The error alone cannot
-/// tell the first two apart: yup-oauth2 drops a failed token refresh's own error and falls
-/// back to the consent flow, which the non-prompting authenticator refuses with the login
-/// hint, whether the refresh token was revoked or the network is down. So after a failure,
-/// and only then, probe Google's token endpoint.
+/// Sort a failed sync into offline, login needed or another error. yup-oauth2 turns a failed
+/// token refresh into a refused consent whether the token was revoked or the network is down,
+/// so only a probe of Google tells the two apart.
 async fn classify(err: anyhow::Error) -> SyncError {
     if !online().await {
         return SyncError::Offline;

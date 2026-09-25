@@ -97,10 +97,13 @@ pub fn delete(app: &mut App, i: usize) {
     if app.store.plans.len() <= 1 || i >= app.store.plans.len() {
         return;
     }
-    // Deleting the active plan activates the next one, or the previous one at the end.
     if app.active() == i {
-        let len = app.store.plans.len();
-        app.set_active(if i + 1 < len { i + 1 } else { i - 1 });
+        let next_or_prev = if i + 1 < app.store.plans.len() {
+            i + 1
+        } else {
+            i - 1
+        };
+        app.set_active(next_or_prev);
     }
     app.store.plans.remove(i);
     app.commit();

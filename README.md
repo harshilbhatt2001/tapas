@@ -96,8 +96,9 @@ machine: which plan is open (`device.json`), the OAuth client and tokens, and th
 bookkeeping in `<data dir>/sync/` (`state.json`, `base.json`, `conflict-*.json`).
 
 When both machines changed the store, tapas merges per plan, session and type: a change on
-one side wins, and if both sides changed the same thing the later edit wins. Before a merge or
-`--keep` replaces the local store, the old one is saved to `<data dir>/sync/conflict-<utc>.json`.
+one side wins, and if both sides changed the same thing the later edit wins. When that drops
+an edit, or `--keep` overwrites a side, the overwritten store is first saved to
+`<data dir>/sync/conflict-<utc>.json`.
 
 ```sh
 tapas sync                              # push, pull or merge once; lists edits that collided

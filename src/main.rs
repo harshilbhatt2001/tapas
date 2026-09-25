@@ -10,8 +10,8 @@ use tapas::{
     export::{self, ExportOpts},
     google::auth,
     model::{DAYS, Plan, Store, hm},
+    services,
     storage::{self, Paths},
-    sync,
 };
 
 /// Terminal training-week planner. Runs the TUI without a subcommand.
@@ -189,7 +189,7 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
                     continue;
                 }
                 println!("Logging in to Google {}", api.name());
-                let tokens = sync::tokens_file(paths, api);
+                let tokens = services::tokens_file(paths, api);
                 auth::login(&secret, api, &tokens).await?;
                 println!("Logged in; tokens cached at {}", tokens.display());
             }
@@ -202,7 +202,7 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
                 weeks: weeks.unwrap_or(store.export.weeks),
                 include_life: store.export.include_life,
             };
-            let r = sync::push_plan(paths, store, &plan, &opts).await?;
+            let r = services::push_plan(paths, store, &plan, &opts).await?;
             store.export.calendar_id = Some(r.calendar_id);
             storage::save(paths, store)?;
             println!(
@@ -217,7 +217,7 @@ async fn google(cmd: GoogleCommand, paths: &Paths, store: &mut Store) -> Result<
 async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<()> {
     match cmd {
         HealthCommand::Weight { apply } => {
-            let Some((kg, at)) = sync::latest_weight(paths).await? else {
+            let Some((kg, at)) = services::latest_weight(paths).await? else {
                 bail!("no weight in Google Health for the last 90 days");
             };
             let kg = (kg * 10.0).round() / 10.0;
@@ -232,10 +232,10 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
             }
         }
         HealthCommand::Week { start, all } => {
-            let monday = sync::week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
-            let workouts = sync::week_workouts(paths, monday).await?;
+            let monday = services::week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
+            let workouts = services::week_workouts(paths, monday).await?;
             let plan = store.plan();
-            let days = sync::planned_vs_done(
+            let days = services::planned_vs_done(
                 &store.library,
                 plan,
                 monday,
@@ -245,10 +245,13 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
             println!("{} vs Google Health, week of {monday}", plan.name);
             let mut hidden = 0;
             for (d, day) in days.iter().enumerate() {
-                let mut what = sync::workouts_text(&day.done);
+                let mut what = services::workouts_text(&day.done);
                 if all && !day.commutes.is_empty() {
                     let sep = if what.is_empty() { "" } else { "; " };
-                    what = format!("{what}{sep}commute: {}", sync::workouts_text(&day.commutes));
+                    what = format!(
+                        "{what}{sep}commute: {}",
+                        services::workouts_text(&day.commutes)
+                    );
                 }
                 hidden += day.commutes.len();
                 println!(

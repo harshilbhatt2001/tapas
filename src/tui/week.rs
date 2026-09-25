@@ -23,7 +23,7 @@ use crate::{
     calc::{self, Level},
     library,
     model::{DAYS, Item, TIME_FMT, hm},
-    sync::{self, DayDone},
+    services::{self, DayDone},
 };
 
 /// Below this width the board shows one day at a time.
@@ -305,13 +305,13 @@ fn done_lines(done: &DayDone, show_commutes: bool) -> Vec<Line<'static>> {
     let mut out = vec![Line::from(head)];
     if !done.done.is_empty() {
         out.push(Line::styled(
-            sync::workouts_text(&done.done),
+            services::workouts_text(&done.done),
             Style::new().fg(DIM),
         ));
     }
     if show_commutes && !done.commutes.is_empty() {
         out.push(Line::styled(
-            format!("commute: {}", sync::workouts_text(&done.commutes)),
+            format!("commute: {}", services::workouts_text(&done.commutes)),
             Style::new().fg(DIM).italic(),
         ));
     }
@@ -503,7 +503,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let done = app.done.as_ref().map(|(monday, w)| {
         (
             *monday,
-            sync::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
+            services::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
         )
     });
     let done_day = |d: usize| done.as_ref().map(|(_, days)| days[d].clone());

@@ -6,10 +6,15 @@ mod export;
 mod library;
 mod plans;
 mod profile;
+mod sync;
 mod week;
 mod widgets;
 
-use std::{io::stdout, sync::mpsc, time::Duration};
+use std::{
+    io::stdout,
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use ratatui::{
@@ -34,7 +39,8 @@ use crate::{
     storage::Paths,
 };
 
-/// Run the TUI until the user quits. Mouse capture is released on exit and on panic.
+/// Run the TUI until the user quits. Mouse capture is released on exit and on panic. Drive
+/// sync runs in the background; quitting waits up to 5 s for unsynced edits.
 pub fn run(paths: Paths, store: Store, device: Device) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -47,6 +53,7 @@ pub fn run(paths: Paths, store: Store, device: Device) -> Result<()> {
         handle: rt.handle().clone(),
         tx,
     });
+    sync::start(&mut app, false);
 
     // Chained under ratatui's own hook, which restores the terminal first.
     let prev = std::panic::take_hook();
@@ -65,12 +72,21 @@ pub fn run(paths: Paths, store: Store, device: Device) -> Result<()> {
             while let Ok(r) = rx.try_recv() {
                 app.on_bg(r);
             }
+            sync::tick(&mut app, Instant::now());
             app.tick = app.tick.wrapping_add(1);
+        }
+        if app.unsynced || app.busy.contains(&app::Task::Sync) {
+            app.info("Syncing with Google Drive before quitting…");
+            terminal.draw(|f| draw(f, &mut app))?;
         }
         Ok(())
     })();
+    let left_behind = sync::on_quit(&mut app, &rx);
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
+    if let Some(msg) = left_behind {
+        eprintln!("{msg}");
+    }
     // Don't wait for in-flight Google calls.
     rt.shutdown_background();
     res
@@ -129,6 +145,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             ]),
             {
                 let mut l = export::google_state(app);
+                l.spans.insert(0, Span::raw(" "));
+                l
+            },
+            {
+                let mut l = sync::status_line(app);
                 l.spans.insert(0, Span::raw(" "));
                 l
             },
@@ -247,6 +268,7 @@ fn help(screen: Screen) -> Text<'static> {
             ("c", "write Google CSV to Downloads"),
             ("g", "push plan to Google Calendar"),
             ("f", "fetch this week's workouts"),
+            ("s", "sync with Google Drive now"),
         ],
     };
     let row = |(k, v): &(&str, &str)| {
@@ -336,6 +358,16 @@ mod tests {
             },
         ));
         assert_eq!((a.day, a.card), (5, 0));
+    }
+
+    #[test]
+    fn sync_status_in_header_and_on_screen_five() {
+        let mut a = app();
+        assert!(render(&mut a, 180, 50).contains(" Sync: off"));
+        a.screen = Screen::Export;
+        let s = render(&mut a, 180, 50);
+        assert!(s.contains("Sync: off (no Google OAuth client"), "{s}");
+        assert!(s.contains("s sync"));
     }
 
     #[test]

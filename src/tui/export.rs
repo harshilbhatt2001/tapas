@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use super::{
-    app::{App, BgResult, FormKind, Screen, Task},
+    app::{App, BgResult, FormKind, Screen, SyncStatus, Task},
     widgets::{DIM, Field, Form, LINE, OK, WARN},
 };
 use crate::{
@@ -52,6 +52,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('c') => write(app, "csv"),
         KeyCode::Char('g') => push(app),
         KeyCode::Char('f') => fetch_workouts(app),
+        KeyCode::Char('s') => super::sync::start(app, true),
         _ => {}
     }
 }
@@ -250,7 +251,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .title(format!(" Export {} ", app.plan().name))
                 .title_bottom(
                     Line::from(
-                        " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts ",
+                        " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts · s sync ",
                     )
                     .fg(DIM),
                 )
@@ -258,7 +259,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         ),
         table,
     );
-    let mut body = vec![google_state(app), Line::raw("")];
+    let mut sync = super::sync::status_line(app);
+    if let SyncStatus::Off(why) = &app.sync {
+        sync.spans.push(Span::raw(format!(" ({why})")));
+    }
+    let mut body = vec![google_state(app), sync, Line::raw("")];
     body.push(Line::raw(format!("Files go to {}.", out_dir().display())));
     if let Some(p) = &app.last_file {
         body.push(Line::from(vec![

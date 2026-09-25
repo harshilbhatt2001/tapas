@@ -24,6 +24,12 @@ pub fn hex(s: &str) -> Color {
     Color::from_str(s).unwrap_or(Color::Gray)
 }
 
+/// A count as terminal cells, saturating at `u16::MAX`.
+#[must_use]
+pub fn cells(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
+}
+
 pub fn is_press(k: &KeyEvent) -> bool {
     matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
@@ -152,8 +158,8 @@ impl Form {
                 let len = options.len().max(1);
                 match k.code {
                     KeyCode::Left | KeyCode::Char('h') => *idx = (*idx + len - 1) % len,
-                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
-                        *idx = (*idx + 1) % len
+                    KeyCode::Right | KeyCode::Char('l' | ' ') => {
+                        *idx = (*idx + 1) % len;
                     }
                     _ => return FormEvent::None,
                 }
@@ -174,7 +180,7 @@ impl Form {
 
     /// Rows needed by [`Form::render_fields`].
     pub fn height(&self) -> u16 {
-        self.fields.len() as u16 + 2
+        cells(self.fields.len()) + 2
     }
 
     /// One row per field, then the error (if any) and the key hint; places the cursor.
@@ -208,12 +214,12 @@ impl Form {
                     f.render_widget(
                         Paragraph::new(input.value())
                             .style(value_style)
-                            .scroll((0, scroll as u16)),
+                            .scroll((0, cells(scroll))),
                         value,
                     );
                     if focused {
                         let x = input.visual_cursor().max(scroll) - scroll;
-                        f.set_cursor_position((value.x + x as u16, value.y));
+                        f.set_cursor_position((value.x + cells(x), value.y));
                     }
                 }
                 FieldKind::Choice { options, idx } => {

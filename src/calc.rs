@@ -20,11 +20,13 @@ fn rpe(lib: &Library, it: &Item) -> f64 {
     resolve(lib, it).map_or(0.0, |(_, e)| e.rpe)
 }
 
+#[must_use]
 pub fn is_train(lib: &Library, it: &Item) -> bool {
     lib.get(&it.type_key)
         .is_some_and(|t| t.category == Category::Train)
 }
 
+#[must_use]
 pub fn is_long(lib: &Library, it: &Item) -> bool {
     let Some(k) = kind(lib, it) else { return false };
     it.effort == "long"
@@ -36,11 +38,13 @@ pub fn is_long(lib: &Library, it: &Item) -> bool {
         }
 }
 
+#[must_use]
 pub fn is_hard(lib: &Library, it: &Item) -> bool {
     is_train(lib, it) && rpe(lib, it) >= 6.0 && kind(lib, it) != Some(Kind::Gym)
 }
 
 /// Energy on top of the day's base, kcal.
+#[must_use]
 pub fn kcal(lib: &Library, weight: f64, it: &Item) -> f64 {
     resolve(lib, it).map_or(0.0, |(_, e)| {
         (e.met - 1.0).max(0.0) * weight * (f64::from(it.dur) / 60.0)
@@ -48,16 +52,19 @@ pub fn kcal(lib: &Library, weight: f64, it: &Item) -> f64 {
 }
 
 /// Training load: hours times RPE.
+#[must_use]
 pub fn load(lib: &Library, it: &Item) -> f64 {
     f64::from(it.dur) / 60.0 * rpe(lib, it)
 }
 
 /// Card tag for sessions long enough to need fuel on the go.
+#[must_use]
 pub fn fuel_on_the_go(lib: &Library, it: &Item) -> bool {
     is_train(lib, it) && kind(lib, it) != Some(Kind::Gym) && it.dur >= 75
 }
 
 /// `Swim (technique)`
+#[must_use]
 pub fn label(lib: &Library, it: &Item) -> String {
     match resolve(lib, it) {
         Some((t, e)) => format!("{} ({})", t.label, e.label.to_lowercase()),
@@ -75,6 +82,7 @@ pub enum Level {
 }
 
 impl Level {
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Level::Rest => "Rest",
@@ -99,7 +107,16 @@ pub struct DayCalc {
     pub train_min: u32,
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "daily kcal and grams are far inside i64"
+)]
+fn whole(x: f64) -> i64 {
+    x.round() as i64
+}
+
 /// Extra energy goes 85% to carbs and 15% to fat on top of the base.
+#[must_use]
 pub fn day_calc(lib: &Library, profile: &Profile, items: &[Item]) -> DayCalc {
     let b = profile.base;
     let extra: f64 = items.iter().map(|x| kcal(lib, profile.weight, x)).sum();
@@ -114,10 +131,10 @@ pub fn day_calc(lib: &Library, profile: &Profile, items: &[Item]) -> DayCalc {
         _ => Level::Big,
     };
     DayCalc {
-        kc: (b.kcal + extra).round() as i64,
-        p: b.p.round() as i64,
-        c: (b.c + extra * 0.85 / 4.0).round() as i64,
-        f: (b.f + extra * 0.15 / 9.0).round() as i64,
+        kc: whole(b.kcal + extra),
+        p: whole(b.p),
+        c: whole(b.c + extra * 0.85 / 4.0),
+        f: whole(b.f + extra * 0.15 / 9.0),
         ld,
         lvl,
         train_min,
@@ -133,6 +150,7 @@ pub struct Guide {
     pub note: Option<String>,
 }
 
+#[must_use]
 pub fn guide(lib: &Library, weight: f64, it: &Item) -> Guide {
     let mut out = Guide::default();
     let Some((t, e)) = resolve(lib, it) else {
@@ -239,6 +257,7 @@ fn overlaps(items: &[Item]) -> Vec<(&Item, &Item)> {
 }
 
 /// Ids of items that overlap a neighbour on the same day.
+#[must_use]
 pub fn clashes(plan: &Plan) -> HashSet<String> {
     plan.days
         .iter()
@@ -248,6 +267,7 @@ pub fn clashes(plan: &Plan) -> HashSet<String> {
 }
 
 /// Conflict and load warnings for the week, deduplicated in order.
+#[must_use]
 pub fn checks(lib: &Library, plan: &Plan) -> Vec<String> {
     let days = &plan.days;
     let k = |it: &Item| kind(lib, it);
@@ -350,6 +370,7 @@ pub fn checks(lib: &Library, plan: &Plan) -> Vec<String> {
 }
 
 /// Shown when `checks` is empty.
+#[must_use]
 pub fn no_checks_message(plan: &Plan) -> &'static str {
     if plan.is_empty() {
         "Add sessions to see checks."
@@ -380,6 +401,7 @@ pub struct Summary {
     pub disciplines: Vec<Discipline>,
 }
 
+#[must_use]
 pub fn summary(lib: &Library, plan: &Plan) -> Summary {
     let all: Vec<&Item> = plan.days.iter().flatten().collect();
     let counted: Vec<&Item> = all
@@ -446,7 +468,7 @@ mod tests {
         let sat = day_calc(&lib, &prof, &p.days[5]);
         assert_eq!((sat.kc, sat.c, sat.f), (4498, 718, 112));
         assert_eq!(sat.lvl, Level::Big);
-        assert_eq!(sat.ld, 16.0);
+        assert!((sat.ld - 16.0).abs() < 1e-9);
         let thu = day_calc(&lib, &prof, &p.days[3]);
         assert_eq!(thu.lvl, Level::Rest);
 

@@ -31,12 +31,14 @@ pub struct ExportEvent {
 }
 
 /// The Monday after `today` (a week ahead when `today` is a Monday).
+#[must_use]
 pub fn next_monday(today: NaiveDate) -> NaiveDate {
     today.week(Weekday::Mon).first_day() + Days::new(7)
 }
 
 /// Exported items of the first week, day by day in plan order. Life items are left out
 /// unless `include_life`, and so are all-day recovery markers other than "Rest day".
+#[must_use]
 pub fn events(store: &Store, plan: &Plan, opts: &ExportOpts) -> Vec<ExportEvent> {
     let lib = &store.library;
     let mut out = Vec::new();
@@ -85,6 +87,7 @@ pub fn events(store: &Store, plan: &Plan, opts: &ExportOpts) -> Vec<ExportEvent>
 }
 
 /// An iCalendar named after the plan; each event repeats weekly `weeks` times.
+#[must_use]
 pub fn to_ics(plan: &Plan, events: &[ExportEvent], weeks: u32) -> String {
     let mut cal = Calendar::new();
     cal.name(&plan.name);

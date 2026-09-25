@@ -11,7 +11,7 @@ use ratatui::{
 
 use super::{
     app::{App, FormKind},
-    widgets::{DIM, Field, Form, frame_popup, hex, popup_area},
+    widgets::{DIM, Field, Form, cells, frame_popup, hex, popup_area},
 };
 use crate::{
     calc,
@@ -191,7 +191,7 @@ pub fn draw(f: &mut Frame, app: &App, form: &Form, id: &str) {
     }
     let guide = Paragraph::new(guide).wrap(Wrap { trim: true });
     let width = 76.min(f.area().width);
-    let guide_h = guide.line_count(width.saturating_sub(2)) as u16;
+    let guide_h = cells(guide.line_count(width.saturating_sub(2)));
     let area = popup_area(f.area(), width, form.height() + guide_h + 4);
     let inner = frame_popup(f, area, &form.title, form.accent);
     let [fields, _, head, body] = Layout::vertical([

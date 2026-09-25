@@ -17,7 +17,7 @@ use uuid::Uuid;
 use super::{
     app::{Action, App, Hit, Modal},
     editor,
-    widgets::{DIM, LINE, OK, SURFACE, WARN, frame_popup, hex, popup_area},
+    widgets::{DIM, LINE, OK, SURFACE, WARN, cells, frame_popup, hex, popup_area},
 };
 use crate::{
     calc::{self, Level},
@@ -190,6 +190,11 @@ fn title(app: &App, it: &Item) -> String {
 }
 
 /// Filled effort pips, ceil(rpe / 2) of 5.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped to 0..=5"
+)]
 fn pips(rpe: f64) -> String {
     let n = (rpe / 2.0).ceil().clamp(0.0, 5.0) as usize;
     format!("{}{}", "▮".repeat(n), "▯".repeat(5 - n))
@@ -355,7 +360,7 @@ fn draw_day(
         .wrap(Wrap { trim: true });
     // Wrapped rows, not lines: narrow columns wrap the Done and commute lists.
     let done_rows = if done.is_some() {
-        done_par.line_count(inner.width) as u16
+        cells(done_par.line_count(inner.width))
     } else {
         0
     };
@@ -377,28 +382,50 @@ fn draw_day(
             .unfilled_style(Style::new().fg(LINE)),
         gauge,
     );
-    let b = |n: i64| Span::raw(n.to_string()).bold();
-    let d_ = |s: &'static str| Span::styled(s, Style::new().fg(DIM));
-    let fuel_text = if wide {
+    f.render_widget(Paragraph::new(fuel_lines(&c, wide)), fuel);
+    f.render_widget(done_par, done_area);
+    draw_cards(f, app, cards, d, clashes, focused);
+}
+
+/// Energy and macros, split over two lines in the narrow wide-board columns.
+fn fuel_lines(c: &calc::DayCalc, wide: bool) -> Vec<Line<'static>> {
+    let num = |n: i64| Span::raw(n.to_string()).bold();
+    let dim = |s: &'static str| Span::styled(s, Style::new().fg(DIM));
+    if wide {
         vec![
-            Line::from(vec![b(c.kc), d_(" kcal")]),
-            Line::from(vec![b(c.p), d_("P "), b(c.c), d_("C "), b(c.f), d_("F")]),
+            Line::from(vec![num(c.kc), dim(" kcal")]),
+            Line::from(vec![
+                num(c.p),
+                dim("P "),
+                num(c.c),
+                dim("C "),
+                num(c.f),
+                dim("F"),
+            ]),
         ]
     } else {
         vec![Line::from(vec![
-            b(c.kc),
-            d_(" kcal   "),
-            b(c.p),
-            d_(" protein g   "),
-            b(c.c),
-            d_(" carbs g   "),
-            b(c.f),
-            d_(" fat g"),
+            num(c.kc),
+            dim(" kcal   "),
+            num(c.p),
+            dim(" protein g   "),
+            num(c.c),
+            dim(" carbs g   "),
+            num(c.f),
+            dim(" fat g"),
         ])]
-    };
-    f.render_widget(Paragraph::new(fuel_text), fuel);
-    f.render_widget(done_par, done_area);
+    }
+}
 
+/// The day's session cards, scrolled so the selected one is visible.
+fn draw_cards(
+    f: &mut Frame,
+    app: &mut App,
+    cards: Rect,
+    d: usize,
+    clashes: &HashSet<String>,
+    focused: bool,
+) {
     let plan = app.store.plan();
     let items: Vec<Item> = plan.sorted_day(d).into_iter().cloned().collect();
     if items.is_empty() {
@@ -416,39 +443,41 @@ fn draw_day(
         .enumerate()
         .map(|(i, it)| {
             let clash = clashes.contains(&it.id);
-            let p = card(app, it, clash, sel == Some(i));
+            let para = card(app, it, clash, sel == Some(i));
             let extra = if clash { 2 } else { 0 };
-            let w = cards.width.saturating_sub(extra);
-            let h = p.line_count(w) as u16 + extra;
-            (p, h, clash)
+            let width = cards.width.saturating_sub(extra);
+            let height = cells(para.line_count(width)) + extra;
+            (para, height, clash)
         })
         .collect();
     // Scroll so the selected card is visible, one row of spacing between cards.
     let mut first = 0;
-    if let Some(s) = sel {
-        while first < s && paras[first..=s].iter().map(|x| x.1 + 1).sum::<u16>() > cards.height {
+    if let Some(selected) = sel {
+        while first < selected
+            && paras[first..=selected].iter().map(|x| x.1 + 1).sum::<u16>() > cards.height
+        {
             first += 1;
         }
     }
     let mut y = cards.y;
-    for (i, (p, h, clash)) in paras.into_iter().enumerate().skip(first) {
+    for (i, (para, h, clash)) in paras.into_iter().enumerate().skip(first) {
         if y >= cards.bottom() {
             break;
         }
         let h = h.min(cards.bottom() - y);
-        let mut r = Rect::new(cards.x, y, cards.width, h);
+        let mut rect = Rect::new(cards.x, y, cards.width, h);
         app.hits.push(Hit {
-            area: r,
+            area: rect,
             day: d,
             card: Some(i),
         });
         if clash {
             let outer = Block::bordered().border_style(Style::new().fg(WARN));
-            let inner = outer.inner(r);
-            f.render_widget(outer, r);
-            r = inner;
+            let inner = outer.inner(rect);
+            f.render_widget(outer, rect);
+            rect = inner;
         }
-        f.render_widget(p, r);
+        f.render_widget(para, rect);
         y += h + 1;
     }
     if first > 0 {
@@ -466,7 +495,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let lib = &app.store.library;
     let checks = calc::checks(lib, &plan);
     let summary = calc::summary(lib, &plan);
-    let lower_h = (checks.len().max(summary.disciplines.len()).max(1) as u16 + 2).clamp(4, 10);
+    let lower_h = (cells(checks.len().max(summary.disciplines.len()).max(1)) + 2).clamp(4, 10);
     let [board, lower] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(lower_h)]).areas(area);
 
@@ -492,9 +521,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     let [checks_area, disc_area] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(lower);
-    let week_note = done
-        .map(|(m, _)| format!(" Checks · Done from Google Health, week of {m} "))
-        .unwrap_or_else(|| " Checks ".into());
+    let week_note = done.map_or_else(
+        || " Checks ".into(),
+        |(m, _)| format!(" Checks · Done from Google Health, week of {m} "),
+    );
     let lines: Vec<Line> = if checks.is_empty() {
         vec![Line::styled(
             calc::no_checks_message(&plan),
@@ -519,12 +549,16 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         ),
         checks_area,
     );
+    draw_disciplines(f, &summary, disc_area);
+}
 
+/// Bars of planned time per discipline.
+fn draw_disciplines(f: &mut Frame, summary: &calc::Summary, area: Rect) {
     let block = Block::bordered()
         .title(" Time by discipline ")
         .border_style(Style::new().fg(LINE));
-    let inner = block.inner(disc_area);
-    f.render_widget(block, disc_area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
     let max = summary
         .disciplines
         .iter()
@@ -571,7 +605,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 /// The "add a session" type list.
 pub fn draw_picker(f: &mut Frame, app: &App, state: &mut ListState) {
     let types = &app.store.library.types;
-    let area = popup_area(f.area(), 40, types.len() as u16 + 4);
+    let area = popup_area(f.area(), 40, cells(types.len()) + 4);
     let inner = frame_popup(f, area, &format!("Add to {}", DAYS[app.day]), Color::White);
     let items: Vec<ListItem> = types
         .iter()

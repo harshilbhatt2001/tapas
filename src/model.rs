@@ -54,6 +54,7 @@ impl Kind {
         Kind::Rest,
         Kind::Other,
     ];
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Kind::Swim => "swim",
@@ -80,6 +81,7 @@ pub enum Category {
 
 impl Category {
     pub const ALL: [Category; 3] = [Category::Train, Category::Life, Category::Rest];
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Category::Train => "train",
@@ -124,11 +126,13 @@ pub struct Library {
 }
 
 impl Library {
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&SessionType> {
         self.types.iter().find(|t| t.key == key)
     }
 
     /// Resolve an item's type and effort; an unknown effort falls back to the type's first one.
+    #[must_use]
     pub fn resolve(&self, it: &Item) -> Option<(&SessionType, &Effort)> {
         let t = self.get(&it.type_key)?;
         let e = t
@@ -156,10 +160,12 @@ pub struct Item {
 
 impl Item {
     /// Start as minutes after midnight.
+    #[must_use]
     pub fn start_min(&self) -> u32 {
         self.start.num_seconds_from_midnight() / 60
     }
     /// End time of day, wrapping past midnight.
+    #[must_use]
     pub fn end(&self) -> NaiveTime {
         let (t, _) = self
             .start
@@ -183,9 +189,11 @@ impl Plan {
             days: Default::default(),
         }
     }
+    #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.days.iter().all(|d| d.is_empty())
+        self.days.iter().all(std::vec::Vec::is_empty)
     }
+    #[must_use]
     pub fn find(&self, id: &str) -> Option<(usize, usize)> {
         self.days
             .iter()
@@ -193,11 +201,13 @@ impl Plan {
             .find_map(|(d, items)| items.iter().position(|x| x.id == id).map(|k| (d, k)))
     }
     /// Items of a day ordered by start time.
+    #[must_use]
     pub fn sorted_day(&self, d: usize) -> Vec<&Item> {
         let mut v: Vec<&Item> = self.days[d].iter().collect();
         v.sort_by_key(|x| x.start);
         v
     }
+    #[must_use]
     pub fn uses_type(&self, key: &str) -> bool {
         self.days.iter().flatten().any(|x| x.type_key == key)
     }
@@ -287,6 +297,7 @@ impl Default for Store {
 }
 
 impl Store {
+    #[must_use]
     pub fn plan(&self) -> &Plan {
         &self.plans[self.active.min(self.plans.len() - 1)]
     }
@@ -302,6 +313,7 @@ impl Store {
         self.active = self.active.min(self.plans.len() - 1);
         self.export.weeks = self.export.weeks.clamp(1, 52);
     }
+    #[must_use]
     pub fn plan_by_name(&self, name: &str) -> Option<&Plan> {
         self.plans
             .iter()
@@ -310,6 +322,12 @@ impl Store {
 }
 
 /// `1h05`, `2h`, `45m`
+#[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "session minutes are small and non-negative"
+)]
 pub fn hm(min: f64) -> String {
     let h = (min / 60.0).floor() as u32;
     let r = (min % 60.0).round() as u32;

@@ -1,6 +1,9 @@
 //! Where tapas keeps its files, and loading and saving the store.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -17,7 +20,7 @@ pub struct Paths {
 impl Paths {
     pub fn resolve() -> Result<Paths> {
         if let Some(home) = std::env::var_os("TAPAS_HOME") {
-            return Ok(Paths::under(home.into()));
+            return Ok(Paths::under(Path::new(&home)));
         }
         let dirs = ProjectDirs::from("", "", "tapas").context("no home directory found")?;
         Ok(Paths {
@@ -27,28 +30,33 @@ impl Paths {
     }
 
     /// `<home>/data` and `<home>/config`.
-    pub fn under(home: PathBuf) -> Paths {
+    #[must_use]
+    pub fn under(home: &Path) -> Paths {
         Paths {
             data_dir: home.join("data"),
             config_dir: home.join("config"),
         }
     }
 
+    #[must_use]
     pub fn store_file(&self) -> PathBuf {
         self.data_dir.join("store.json")
     }
 
     /// Google "Desktop app" OAuth client JSON.
+    #[must_use]
     pub fn client_secret_file(&self) -> PathBuf {
         self.config_dir.join("client_secret.json")
     }
 
     /// OAuth token cache of one Google API (`calendar`, `health`).
+    #[must_use]
     pub fn tokens_file(&self, api: &str) -> PathBuf {
         self.config_dir.join(format!("tokens-{api}.json"))
     }
 
     /// Pre-split cache that held one token for every scope; the Health API rejects it.
+    #[must_use]
     pub fn legacy_tokens_file(&self) -> PathBuf {
         self.config_dir.join("tokens.json")
     }
@@ -105,7 +113,7 @@ mod tests {
     #[test]
     fn corrupt_json_is_an_error_not_a_silent_overwrite() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::under(dir.path().into());
+        let paths = Paths::under(dir.path());
         fs::create_dir_all(&paths.data_dir).unwrap();
         fs::write(paths.store_file(), b"{ not json").unwrap();
         let err = load(&paths).unwrap_err();
@@ -120,7 +128,7 @@ mod tests {
     #[test]
     fn missing_file_gives_default() {
         let dir = tempfile::tempdir().unwrap();
-        let s = load(&Paths::under(dir.path().into())).unwrap();
+        let s = load(&Paths::under(dir.path())).unwrap();
         assert_eq!(s.plans.len(), 1);
         assert_eq!(s.plans[0].name, "Week 1");
         assert!(s.plans[0].is_empty());
@@ -129,7 +137,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::under(dir.path().into());
+        let paths = Paths::under(dir.path());
         let mut s = Store::default();
         s.plans.push(starter_plan("Base"));
         s.active = 1;

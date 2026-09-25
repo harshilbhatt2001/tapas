@@ -182,6 +182,7 @@ pub struct App {
 }
 
 impl App {
+    #[must_use]
     pub fn new(paths: Paths, store: Store) -> App {
         let plan_sel = store.active;
         App {
@@ -280,6 +281,7 @@ impl App {
     }
 
     /// Status line text for running tasks, with a spinner.
+    #[must_use]
     pub fn busy_text(&self) -> Option<String> {
         const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
         let first = self.busy.iter().next()?;

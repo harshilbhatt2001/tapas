@@ -43,8 +43,10 @@ fn t(h: u32, m: u32) -> NaiveTime {
     NaiveTime::from_hms_opt(h, m, 0).expect("valid time of day")
 }
 
+#[must_use]
+#[expect(clippy::too_many_lines, reason = "one flat table of starter data")]
 pub fn default_library() -> Library {
-    use Category::*;
+    use Category::{Life, Rest, Train};
     let heavy = Effort {
         legs: true,
         ..ef("heavy", "Heavy strength", 6.0, 5.0, 55)
@@ -187,6 +189,7 @@ pub fn default_library() -> Library {
 }
 
 /// A new item of `type_key` with its first effort and default start and duration.
+#[must_use]
 pub fn new_item(lib: &Library, type_key: &str) -> Option<Item> {
     let t = lib.get(type_key)?;
     let e = t.efforts.first()?;
@@ -201,6 +204,7 @@ pub fn new_item(lib: &Library, type_key: &str) -> Option<Item> {
 }
 
 /// The artifact's starter week.
+#[must_use]
 pub fn starter_days() -> [Vec<Item>; 7] {
     let mk = |ty: &str, effort: &str, start: NaiveTime, dur: u32, notes: &str| Item {
         id: Uuid::new_v4().to_string(),
@@ -268,6 +272,7 @@ pub fn starter_days() -> [Vec<Item>; 7] {
     ]
 }
 
+#[must_use]
 pub fn starter_plan(name: &str) -> Plan {
     Plan {
         days: starter_days(),

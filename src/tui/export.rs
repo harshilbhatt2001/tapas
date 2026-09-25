@@ -78,7 +78,7 @@ pub fn apply(app: &mut App, form: &Form) -> Result<(), String> {
     s.include_life = form.toggle(2);
     if s.calendar_name != name {
         // A different name means a different calendar next push.
-        s.calendar_name = name.to_owned();
+        name.clone_into(&mut s.calendar_name);
         s.calendar_id = None;
     }
     app.commit();
@@ -190,12 +190,7 @@ pub fn on_workouts(app: &mut App, monday: NaiveDate, res: Result<Vec<Workout>>) 
 
 /// One line on whether Google is usable.
 pub fn google_state(app: &App) -> Line<'static> {
-    if !app.paths.client_secret_file().exists() {
-        Line::from(vec![
-            Span::styled("Google: not set up. ", Style::new().fg(WARN)),
-            Span::raw("Run `tapas google setup <client_secret.json>`, then `tapas google login`."),
-        ])
-    } else {
+    if app.paths.client_secret_file().exists() {
         let mut spans = vec![Span::raw("Google: ")];
         let mut missing = Vec::new();
         for api in Api::ALL {
@@ -217,6 +212,11 @@ pub fn google_state(app: &App) -> Line<'static> {
             spans.push(Span::raw("Run `tapas google login` in a terminal."));
         }
         Line::from(spans)
+    } else {
+        Line::from(vec![
+            Span::styled("Google: not set up. ", Style::new().fg(WARN)),
+            Span::raw("Run `tapas google setup <client_secret.json>`, then `tapas google login`."),
+        ])
     }
 }
 

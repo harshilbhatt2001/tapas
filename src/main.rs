@@ -137,16 +137,17 @@ fn main() -> Result<()> {
             };
             match output {
                 Some(file) => {
-                    fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?
+                    fs::write(&file, text)
+                        .with_context(|| format!("writing {}", file.display()))?;
                 }
                 None => print!("{text}"),
             }
         }
         Some(Command::Google { command }) => {
-            runtime()?.block_on(google(command, &paths, &mut store))?
+            runtime()?.block_on(google(command, &paths, &mut store))?;
         }
         Some(Command::Health { command }) => {
-            runtime()?.block_on(health(command, &paths, &mut store))?
+            runtime()?.block_on(health(command, &paths, &mut store))?;
         }
     }
     Ok(())

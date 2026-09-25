@@ -34,30 +34,27 @@ pub struct PushReport {
 
 /// Convert a [`CalEvent`] to a Calendar API event tagged with the plan and item ids.
 pub fn to_event(ev: &CalEvent, plan_id: &str, weeks: u32, tz: &str) -> Result<Event> {
-    let (start, end) = match (ev.start, ev.end) {
-        (Some(start), end) => {
-            let zone: Tz = tz.parse().map_err(|e| anyhow!("time zone {tz}: {e}"))?;
-            let at = |t: NaiveDateTime| -> Result<EventDateTime> {
-                let utc = zone
-                    .from_local_datetime(&t)
-                    .earliest()
-                    .with_context(|| format!("{t} does not exist in {tz}"))?
-                    .with_timezone(&Utc);
-                Ok(EventDateTime {
-                    date_time: Some(utc),
-                    time_zone: Some(tz.to_owned()),
-                    ..Default::default()
-                })
-            };
-            (at(start)?, at(end.unwrap_or(start))?)
-        }
-        (None, _) => {
-            let day = |d: NaiveDate| EventDateTime {
-                date: Some(d),
+    let (start, end) = if let (Some(start), end) = (ev.start, ev.end) {
+        let zone: Tz = tz.parse().map_err(|e| anyhow!("time zone {tz}: {e}"))?;
+        let at = |t: NaiveDateTime| -> Result<EventDateTime> {
+            let utc = zone
+                .from_local_datetime(&t)
+                .earliest()
+                .with_context(|| format!("{t} does not exist in {tz}"))?
+                .with_timezone(&Utc);
+            Ok(EventDateTime {
+                date_time: Some(utc),
+                time_zone: Some(tz.to_owned()),
                 ..Default::default()
-            };
-            (day(ev.date), day(ev.date + Days::new(1)))
-        }
+            })
+        };
+        (at(start)?, at(end.unwrap_or(start))?)
+    } else {
+        let day = |d: NaiveDate| EventDateTime {
+            date: Some(d),
+            ..Default::default()
+        };
+        (day(ev.date), day(ev.date + Days::new(1)))
     };
     let private = HashMap::from([
         (PLAN_KEY.to_owned(), plan_id.to_owned()),

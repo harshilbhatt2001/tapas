@@ -45,10 +45,10 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             app.lib_effort = 0;
         }
         (KeyCode::Char('j') | KeyCode::Down, LibFocus::Efforts) => {
-            app.lib_effort = (app.lib_effort + 1).min(efforts.saturating_sub(1))
+            app.lib_effort = (app.lib_effort + 1).min(efforts.saturating_sub(1));
         }
         (KeyCode::Char('k') | KeyCode::Up, LibFocus::Efforts) => {
-            app.lib_effort = app.lib_effort.saturating_sub(1)
+            app.lib_effort = app.lib_effort.saturating_sub(1);
         }
         (KeyCode::Enter | KeyCode::Char('e'), LibFocus::Types) => {
             if let Some(t) = app.store.library.types.get(app.lib_type) {
@@ -183,14 +183,15 @@ fn effort_form(e: &Effort, title: &str, accent: Color) -> Form {
 }
 
 /// Slug key from a label, unique among `taken`.
-fn new_key<'a>(label: &str, taken: impl Iterator<Item = &'a str> + Clone) -> String {
+fn new_key<'a>(label: &str, taken: &(impl Iterator<Item = &'a str> + Clone)) -> String {
     let base = slug::slugify(label);
     let base = if base.is_empty() {
         "custom".into()
     } else {
         base
     };
-    (1..)
+    // Among count + 1 candidates at least one is free.
+    (1..=taken.clone().count() + 1)
         .map(|n| {
             if n == 1 {
                 base.clone()
@@ -199,7 +200,7 @@ fn new_key<'a>(label: &str, taken: impl Iterator<Item = &'a str> + Clone) -> Str
             }
         })
         .find(|k| !taken.clone().any(|t| t == k))
-        .expect("unbounded")
+        .expect("a free candidate")
 }
 
 fn label(form: &Form) -> Result<String, String> {
@@ -223,25 +224,24 @@ pub fn apply_type(app: &mut App, form: &Form, i: Option<usize>) -> Result<(), St
     let start = NaiveTime::parse_from_str(form.text(4), TIME_FMT)
         .map_err(|_| "Default start: use HH:MM".to_string())?;
     let apply = |t: &mut SessionType| {
-        t.label = label.clone();
-        t.color = color.clone();
+        t.label.clone_from(&label);
+        t.color.clone_from(&color);
         t.kind = Kind::ALL[form.choice(2)];
         t.category = Category::ALL[form.choice(3)];
         t.start = start;
         t.counted = form.toggle(5);
     };
     let types = &mut app.store.library.types;
-    match i {
-        Some(i) => apply(types.get_mut(i).ok_or("That type is gone")?),
-        None => {
-            let mut t = blank_type();
-            t.key = new_key(&label, types.iter().map(|t| t.key.as_str()));
-            t.efforts[0].key = "easy".into();
-            apply(&mut t);
-            types.push(t);
-            app.lib_type = types.len() - 1;
-            app.lib_effort = 0;
-        }
+    if let Some(i) = i {
+        apply(types.get_mut(i).ok_or("That type is gone")?);
+    } else {
+        let mut t = blank_type();
+        t.key = new_key(&label, &types.iter().map(|t| t.key.as_str()));
+        t.efforts[0].key = "easy".into();
+        apply(&mut t);
+        types.push(t);
+        app.lib_type = types.len() - 1;
+        app.lib_effort = 0;
     }
     app.commit();
     Ok(())
@@ -259,7 +259,7 @@ pub fn apply_effort(app: &mut App, form: &Form, t: usize, e: Option<usize>) -> R
     }
     let dur: u32 = form.parse(3)?;
     let apply = |x: &mut Effort| {
-        x.label = label.clone();
+        x.label.clone_from(&label);
         x.rpe = rpe;
         x.met = met;
         x.dur = dur;
@@ -271,15 +271,14 @@ pub fn apply_effort(app: &mut App, form: &Form, t: usize, e: Option<usize>) -> R
         .types
         .get_mut(t)
         .ok_or("That type is gone")?;
-    match e {
-        Some(e) => apply(ty.efforts.get_mut(e).ok_or("That effort is gone")?),
-        None => {
-            let mut x = blank_effort();
-            x.key = new_key(&label, ty.efforts.iter().map(|e| e.key.as_str()));
-            apply(&mut x);
-            ty.efforts.push(x);
-            app.lib_effort = ty.efforts.len() - 1;
-        }
+    if let Some(e) = e {
+        apply(ty.efforts.get_mut(e).ok_or("That effort is gone")?);
+    } else {
+        let mut x = blank_effort();
+        x.key = new_key(&label, &ty.efforts.iter().map(|e| e.key.as_str()));
+        apply(&mut x);
+        ty.efforts.push(x);
+        app.lib_effort = ty.efforts.len() - 1;
     }
     app.commit();
     Ok(())

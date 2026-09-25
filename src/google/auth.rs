@@ -29,6 +29,7 @@ pub enum Api {
 impl Api {
     pub const ALL: [Api; 2] = [Api::Calendar, Api::Health];
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Api::Calendar => "calendar",
@@ -36,6 +37,7 @@ impl Api {
         }
     }
 
+    #[must_use]
     pub fn scopes(self) -> &'static [&'static str] {
         match self {
             Api::Calendar => &[CALENDAR_SCOPE],
@@ -113,6 +115,7 @@ pub async fn access_token(auth: &Auth, scopes: &[&str]) -> Result<String> {
 }
 
 /// True when the token cache holds at least one token.
+#[must_use]
 pub fn is_logged_in(tokens: &Path) -> bool {
     std::fs::read(tokens)
         .ok()

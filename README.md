@@ -28,7 +28,7 @@ The toolchain comes from [devenv](https://devenv.sh); there is no global cargo.
 
 ```sh
 devenv shell                  # rust toolchain, clippy, rustfmt, rust-analyzer, nom, nvd
-devenv test                   # cargo fmt --check, clippy -D warnings, cargo test
+devenv test                   # git hooks (rustfmt, clippy pedantic -D warnings), cargo test
 tapas                         # inside the shell: cargo run -- "$@"
 nom build .#default           # build the Nix package with readable output
 devenv build outputs.tapas    # same derivation via devenv

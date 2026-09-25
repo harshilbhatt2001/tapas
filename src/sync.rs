@@ -17,6 +17,7 @@ use crate::{
     storage::Paths,
 };
 
+#[must_use]
 pub fn cal_events(events: &[ExportEvent]) -> Vec<CalEvent> {
     events
         .iter()
@@ -32,12 +33,14 @@ pub fn cal_events(events: &[ExportEvent]) -> Vec<CalEvent> {
 }
 
 /// The tapas kind of a Google workout, if it maps to one.
+#[must_use]
 pub fn workout_kind(w: &Workout) -> Option<Kind> {
     let key = health::map_exercise_type(&w.exercise_type)?;
     Kind::ALL.into_iter().find(|k| k.name() == key)
 }
 
 /// `run`, or the lower-cased Google type for unmapped workouts.
+#[must_use]
 pub fn workout_label(w: &Workout) -> String {
     workout_kind(w).map_or_else(
         || w.exercise_type.to_lowercase().replace('_', " "),
@@ -46,6 +49,7 @@ pub fn workout_label(w: &Workout) -> String {
 }
 
 /// `bike 2h22, walking 21m`
+#[must_use]
 pub fn workouts_text(workouts: &[Workout]) -> String {
     workouts
         .iter()
@@ -55,6 +59,7 @@ pub fn workouts_text(workouts: &[Workout]) -> String {
 }
 
 /// Monday of the week containing `d`.
+#[must_use]
 pub fn week_monday(d: NaiveDate) -> NaiveDate {
     d.week(Weekday::Mon).first_day()
 }
@@ -67,6 +72,7 @@ pub const MIN_TRAINING_RIDE_MET: f64 = 6.0;
 
 /// A bike ride too short or too easy to count as training, such as a commute. Without calories,
 /// duration alone decides.
+#[must_use]
 pub fn is_commute(w: &Workout, weight_kg: f64) -> bool {
     if workout_kind(w) != Some(Kind::Bike) {
         return false;
@@ -91,6 +97,7 @@ pub struct DayDone {
 }
 
 impl DayDone {
+    #[must_use]
     pub fn done_min(&self) -> u32 {
         self.done.iter().map(|w| w.minutes).sum()
     }
@@ -98,6 +105,7 @@ impl DayDone {
 
 /// Training items of `plan` next to the workouts that started in the week from `monday`.
 /// `weight_kg` turns calories into effort for [`is_commute`].
+#[must_use]
 pub fn planned_vs_done(
     lib: &Library,
     plan: &Plan,
@@ -127,6 +135,7 @@ pub fn planned_vs_done(
 
 /// Token cache of `api`. A pre-split `tokens.json` still works for Calendar, so it becomes
 /// the Calendar cache.
+#[must_use]
 pub fn tokens_file(paths: &Paths, api: Api) -> PathBuf {
     let file = paths.tokens_file(api.name());
     let legacy = paths.legacy_tokens_file();
@@ -137,6 +146,7 @@ pub fn tokens_file(paths: &Paths, api: Api) -> PathBuf {
     file
 }
 
+#[must_use]
 pub fn is_logged_in(paths: &Paths, api: Api) -> bool {
     auth::is_logged_in(&tokens_file(paths, api))
 }

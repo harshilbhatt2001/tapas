@@ -45,9 +45,21 @@ in
     if [ -L result-prev ]; then nvd diff result-prev result; fi
   '';
 
+  # Pre-commit hooks; `devenv test` (and so CI) runs them on every file too.
+  # Lint levels, pedantic included, live in Cargo.toml `[lints]`.
+  git-hooks.hooks = {
+    rustfmt.enable = true;
+    clippy = {
+      enable = true;
+      settings = {
+        denyWarnings = true;
+        offline = false;
+        extraArgs = "--all-targets";
+      };
+    };
+  };
+
   enterTest = ''
-    cargo fmt --check
-    cargo clippy --all-targets -- -D warnings
     cargo test
   '';
 

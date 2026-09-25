@@ -276,14 +276,21 @@ mod tests {
             plans: vec![starter_plan("Base")],
             ..Store::default()
         };
-        App::new(Paths::under("/nonexistent/tapas".into()), store)
+        App::new(
+            Paths::under(std::path::Path::new("/nonexistent/tapas")),
+            store,
+        )
     }
 
     fn text(buf: &Buffer) -> String {
         let w = buf.area.width as usize;
         buf.content
             .chunks(w)
-            .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+            .map(|row| {
+                row.iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }

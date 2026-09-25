@@ -17,6 +17,7 @@ pub struct Workout {
 }
 
 /// Library kind key for a Google exercise type, if tapas tracks it.
+#[must_use]
 pub fn map_exercise_type(exercise_type: &str) -> Option<&'static str> {
     Some(match exercise_type {
         "SWIMMING" | "SWIMMING_POOL" | "SWIMMING_OPEN_WATER" => "swim",
@@ -72,6 +73,10 @@ struct ExercisePoint {
 #[serde(rename_all = "camelCase", default)]
 struct Exercise {
     interval: Option<Interval>,
+    #[expect(
+        clippy::struct_field_names,
+        reason = "mirrors the API's `exerciseType`"
+    )]
     exercise_type: Option<String>,
     metrics_summary: Option<MetricsSummary>,
 }

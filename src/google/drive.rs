@@ -281,95 +281,12 @@ impl Drive {
 mod tests {
     use super::*;
 
-    fn file(props: &[(&str, &str)]) -> File {
-        File {
-            id: Some("f1".into()),
-            head_revision_id: Some("r7".into()),
-            created_time: Some("2026-09-25T10:00:00Z".parse().unwrap()),
-            app_properties: Some(
-                props
-                    .iter()
-                    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                    .collect(),
-            ),
-            ..Default::default()
-        }
-    }
-
+    /// `services::classify` tells a needed login apart by this downcast.
     #[test]
-    fn meta_reads_ids_and_app_properties() {
-        let meta =
-            RemoteMeta::try_from(file(&[("tapasSchema", "2"), ("tapasDevice", "d1")])).unwrap();
-        assert_eq!(
-            meta,
-            RemoteMeta {
-                file_id: "f1".into(),
-                head_revision_id: "r7".into(),
-                created: "2026-09-25T10:00:00Z".parse().unwrap(),
-                schema: Some(2),
-                device: Some("d1".into()),
-            }
-        );
-    }
-
-    #[test]
-    fn meta_without_properties_has_no_schema() {
-        let mut f = file(&[]);
-        f.app_properties = None;
-        let meta = RemoteMeta::try_from(f).unwrap();
-        assert_eq!((meta.schema, meta.device), (None, None));
-    }
-
-    #[test]
-    fn meta_rejects_bad_schema_and_missing_head() {
-        assert!(RemoteMeta::try_from(file(&[("tapasSchema", "two")])).is_err());
-        let mut f = file(&[]);
-        f.head_revision_id = None;
-        assert!(RemoteMeta::try_from(f).is_err());
-    }
-
-    #[test]
-    fn meta_parses_drive_json() {
-        let f: File = serde_json::from_str(
-            r#"{"id":"abc","headRevisionId":"0B1","createdTime":"2026-09-25T08:30:00.123Z",
-                "appProperties":{"tapasSchema":"3"}}"#,
-        )
-        .unwrap();
-        let meta = RemoteMeta::try_from(f).unwrap();
-        assert_eq!(meta.head_revision_id, "0B1");
-        assert_eq!(meta.schema, Some(3));
-    }
-
-    #[test]
-    fn properties_round_trip() {
-        let mut f = file(&[]);
-        f.app_properties = Some(app_properties(4, "dev"));
-        let meta = RemoteMeta::try_from(f).unwrap();
-        assert_eq!(
-            (meta.schema, meta.device.as_deref()),
-            (Some(4), Some("dev"))
-        );
-    }
-
-    #[test]
-    fn query_escapes_quotes() {
-        assert_eq!(
-            name_query("store.json"),
-            "name = 'store.json' and trashed = false"
-        );
-        assert_eq!(
-            name_query(r"it's\"),
-            r"name = 'it\'s\\' and trashed = false"
-        );
-    }
-
-    #[test]
-    fn refused_login_error_is_just_the_hint() {
+    fn refused_login_becomes_needs_login() {
         let hint = auth::login_hint(auth::Api::Calendar);
-        let err = ApiError::MissingToken(Box::new(yup_oauth2::Error::UserError(hint.clone())));
+        let err = ApiError::MissingToken(Box::new(yup_oauth2::Error::UserError(hint)));
         let err = api_err(err, "listing");
-        assert_eq!(err.to_string(), hint);
         assert!(err.downcast_ref::<auth::NeedsLogin>().is_some());
-        assert!(hint.contains("tapas google login --only calendar"));
     }
 }

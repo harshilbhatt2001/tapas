@@ -70,9 +70,7 @@ tapas google login                      # browser consent, caches tokens
 Scopes requested: `calendar.app.created` (tapas only touches the calendar it creates),
 `drive.appdata` (a hidden app folder in your Drive, used to sync the store between machines),
 `googlehealth.activity_and_fitness.readonly`,
-`googlehealth.health_metrics_and_measurements.readonly`. Calendar and Drive share one consent;
-if you logged in before Drive sync existed, run `tapas google login --only calendar` again to
-grant `drive.appdata`.
+`googlehealth.health_metrics_and_measurements.readonly`. Calendar and Drive share one consent.
 
 Plans live in the platform data dir (`~/.local/share/tapas` on Linux), the OAuth client and
 tokens in the config dir (`~/.config/tapas`). Set `TAPAS_HOME` to use
@@ -85,8 +83,7 @@ Drive (`drive.appdata`: tapas sees only its own files there, and they do not sho
 Drive). There is no server of ours.
 
 To turn it on, do the [Google setup](#google-setup) on each machine, with the Google Drive
-API enabled and `drive.appdata` on the consent screen. If you logged in before sync existed,
-log in again so the token includes the Drive scope:
+API enabled and `drive.appdata` on the consent screen, and grant Drive access at login:
 
 ```sh
 tapas google login --only calendar
@@ -114,8 +111,9 @@ The TUI syncs by itself: at start, 3 s after your last edit, and on quit (waitin
 merged N (edits that collided), offline, login needed or error. Offline, keep working:
 edits are saved locally and tapas retries every minute. Sync never opens a browser; when
 the login no longer works it says "login needed" and you run `tapas google login --only
-calendar` in a terminal. Without an OAuth client or login, sync is simply off. A store on
-Drive written by a newer tapas is never overwritten; update tapas on that machine.
+calendar` in a terminal. Without an OAuth client or login, sync is simply off. A store of
+another schema version, local or on Drive, is refused and never overwritten; run the same
+tapas on every machine.
 
 ### Sharing plans through a synced folder
 
@@ -133,8 +131,7 @@ in one rename, so the sync tool never picks up a half-written store.
 
 Caveat: tapas does not notice the conflict copies a sync tool makes when two machines edit
 before syncing (for example `store.sync-conflict-*.json` or "conflicted copy"). Edit on one
-machine at a time, and merge or delete such copies by hand. A store written by a newer tapas
-is refused rather than overwritten; update tapas on that machine.
+machine at a time, and merge or delete such copies by hand.
 
 ## CLI
 

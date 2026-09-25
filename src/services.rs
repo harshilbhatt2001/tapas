@@ -135,17 +135,9 @@ pub fn planned_vs_done(
     out
 }
 
-/// Token cache of `api`. A pre-split `tokens.json` still works for Calendar, so it becomes
-/// the Calendar cache.
 #[must_use]
 pub fn tokens_file(paths: &Paths, api: Api) -> PathBuf {
-    let file = paths.tokens_file(api.name());
-    let legacy = paths.legacy_tokens_file();
-    if api == Api::Calendar && !file.exists() && legacy.exists() {
-        // Best effort: if the rename fails the user is asked to log in again.
-        let _ = std::fs::rename(&legacy, &file);
-    }
-    file
+    paths.tokens_file(api.name())
 }
 
 #[must_use]
@@ -262,7 +254,7 @@ impl std::fmt::Display for SyncError {
 impl std::error::Error for SyncError {}
 
 /// Why Drive sync is off here, `None` when it is set up: it needs the OAuth client and a
-/// Calendar login that includes the Drive scope (logins from before sync existed lack it).
+/// Calendar login that was granted the Drive scope.
 #[must_use]
 pub fn sync_off(paths: &Paths) -> Option<String> {
     let login = "run `tapas google login --only calendar`";

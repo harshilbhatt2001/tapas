@@ -164,7 +164,7 @@ pub fn read_state(paths: &Paths) -> Result<Option<SyncState>> {
     read_file(&state_file(paths), |b| Ok(serde_json::from_slice(b)?))
 }
 
-/// The last synced document, migrated if an older tapas wrote it.
+/// The last synced document.
 fn read_base(paths: &Paths) -> Result<Option<Store>> {
     read_file(&base_file(paths), storage::parse)
 }
@@ -209,12 +209,16 @@ pub fn is_dirty(paths: &Paths, local: &Store) -> Result<bool> {
     })
 }
 
-/// Serde would drop fields a newer tapas added, so never write over them.
+/// Checked before anything is downloaded or written, so a file of another version is never
+/// overwritten.
 fn check_schema(f: &RemoteMeta) -> Result<()> {
-    if let Some(v) = f.schema.filter(|v| *v > STORE_VERSION) {
+    if f.schema != Some(STORE_VERSION) {
+        let v = f
+            .schema
+            .map_or_else(|| "none".to_owned(), |v| v.to_string());
         bail!(
-            "the store on Drive is version {v}, newer than this tapas supports \
-             ({STORE_VERSION}); update tapas on this machine"
+            "the store on Drive has schema {v}, but this tapas reads only version \
+             {STORE_VERSION}"
         );
     }
     Ok(())
@@ -296,7 +300,7 @@ impl<'a, R: Remote> Session<'a, R> {
         }
     }
 
-    /// Revision `rev` of `file_id`, migrated to the current version.
+    /// Revision `rev` of `file_id`.
     async fn fetch(&self, file_id: &str, rev: &str) -> Result<Store> {
         let bytes = self.remote.download(file_id, rev).await?;
         storage::parse(&bytes).context("reading the store on Drive")
@@ -397,7 +401,7 @@ impl<'a, R: Remote> Session<'a, R> {
 ///
 /// A prior dirty local store is saved to `sync/conflict-<utc>.json` before it is replaced.
 /// Several `store.json` files (two machines' first syncs racing) resolve to the oldest; the
-/// others are merged in and deleted. Nothing is written while Drive holds a newer schema.
+/// others are merged in and deleted. Nothing is written while Drive holds another schema.
 pub async fn sync<R: Remote>(
     paths: &Paths,
     remote: &R,
@@ -930,19 +934,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newer_remote_schema_is_never_written() {
+    async fn other_remote_schema_is_never_written() {
         let (fake, mut a, _) = pair().await;
-        fake.files.lock().unwrap()[0].meta.schema = Some(STORE_VERSION + 1);
         a.edit(set_notes(0, 0, "local"));
         let state = read_state(&a.paths).unwrap();
-        let err = format!("{:#}", a.sync(&fake).await.unwrap_err());
-        assert!(err.contains("newer than this tapas supports"), "{err}");
-        assert_eq!(fake.revs(0), 1);
-        assert_eq!(read_state(&a.paths).unwrap(), state);
-        assert_eq!(notes(&a.on_disk(), 0, 0), "local");
-        let err = keep(&a.paths, &fake, &mut a.store, &a.device, Side::Local).await;
-        assert!(err.is_err());
-        assert_eq!(fake.revs(0), 1);
+        for schema in [Some(STORE_VERSION - 1), Some(STORE_VERSION + 1), None] {
+            fake.files.lock().unwrap()[0].meta.schema = schema;
+            assert!(a.sync(&fake).await.is_err());
+            let kept = keep(&a.paths, &fake, &mut a.store, &a.device, Side::Local).await;
+            assert!(kept.is_err());
+            assert_eq!(fake.revs(0), 1);
+            assert_eq!(read_state(&a.paths).unwrap(), state);
+            assert_eq!(notes(&a.on_disk(), 0, 0), "local");
+        }
     }
 
     /// Another device writes `text` on the first session of `day`, stamped `at`.

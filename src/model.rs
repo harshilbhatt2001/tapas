@@ -100,7 +100,6 @@ pub struct Effort {
     /// Default duration in minutes.
     pub dur: u32,
     /// Heavy leg work: keep 48 h away from key run/bike sessions.
-    #[serde(default)]
     pub legs: bool,
 }
 
@@ -119,7 +118,6 @@ pub struct SessionType {
     pub counted: bool,
     pub efforts: Vec<Effort>,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
-    #[serde(default)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -157,10 +155,8 @@ pub struct Item {
     pub start: NaiveTime,
     /// Minutes; 0 means an all-day marker.
     pub dur: u32,
-    #[serde(default)]
     pub notes: String,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
-    #[serde(default)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -186,7 +182,6 @@ pub struct Plan {
     pub name: String,
     pub days: [Vec<Item>; 7],
     /// Last change of the plan itself (its name); items carry their own.
-    #[serde(default)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -248,10 +243,8 @@ impl Default for Base {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Profile {
     pub weight: f64,
-    #[serde(default)]
     pub base: Base,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
-    #[serde(default)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -271,10 +264,8 @@ pub struct ExportSettings {
     pub weeks: u32,
     pub calendar_name: String,
     /// Google Calendar id of the calendar this app created, once it exists.
-    #[serde(default)]
     pub calendar_id: Option<String>,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
-    #[serde(default)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -300,7 +291,6 @@ pub struct Store {
     pub profile: Profile,
     pub library: Library,
     pub plans: Vec<Plan>,
-    #[serde(default)]
     pub export: ExportSettings,
 }
 
@@ -352,7 +342,6 @@ impl Store {
 pub struct Device {
     pub device_id: Uuid,
     /// Id of the plan the TUI and CLI work on; the first plan when unset or gone.
-    #[serde(default)]
     pub active_plan: Option<String>,
 }
 

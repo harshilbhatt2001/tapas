@@ -24,7 +24,7 @@ use crate::{
     model::{DAYS, Device, Library, STORE_VERSION, Store},
     storage::{self, Paths},
 };
-use merge::{Conflict, Entity, Side};
+use merge::{Conflict, Entity, Merged, Side};
 
 /// Name of the synced file in appDataFolder.
 pub const FILE_NAME: &str = "store.json";
@@ -123,7 +123,8 @@ pub enum Outcome {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Report {
     pub outcome: Outcome,
-    /// Copies saved before they were overwritten: the local store, or Drive's for `--keep local`.
+    /// Copies saved before they were overwritten: the local store when a merge dropped an edit
+    /// or on `--keep remote`, Drive's on `--keep local`.
     pub conflict_files: Vec<PathBuf>,
     /// Worth telling the user, but the sync went through.
     pub warnings: Vec<String>,
@@ -312,13 +313,12 @@ impl<'a, R: Remote> Session<'a, R> {
         local: &Store,
         remote: &Store,
         remote_device: Option<Uuid>,
-    ) -> Store {
-        let m = merge::merge(base, local, remote, self.device, remote_device);
+    ) -> Merged {
+        let mut m = merge::merge(base, local, remote, self.device, remote_device);
         self.merged = true;
-        self.conflicts.extend(m.conflicts);
-        let mut store = m.store;
-        store.normalize();
-        store
+        self.conflicts.extend(m.conflicts.iter().cloned());
+        m.store.normalize();
+        m
     }
 
     fn save_conflict(&mut self, store: &Store) -> Result<()> {
@@ -326,12 +326,12 @@ impl<'a, R: Remote> Session<'a, R> {
         Ok(())
     }
 
-    /// Replace the local store with `next`, saving the old one first when `keep_old`.
-    fn replace(&mut self, local: &mut Store, next: Store, keep_old: bool) -> Result<()> {
+    /// Replace the local store with `next`, saving the old one first when `save_old`.
+    fn replace(&mut self, local: &mut Store, next: Store, save_old: bool) -> Result<()> {
         if *local == next {
             return Ok(());
         }
-        if keep_old {
+        if save_old {
             self.save_conflict(local)?;
         }
         storage::write_store(self.paths, &next)?;
@@ -376,7 +376,7 @@ impl<'a, R: Remote> Session<'a, R> {
                 return Ok(());
             };
             let theirs = self.fetch(file_id, lost).await?;
-            let merged = self.merge(&head_doc, local, &theirs, None);
+            let merged = self.merge(&head_doc, local, &theirs, None).store;
             if merged == *local {
                 return Ok(());
             }
@@ -399,7 +399,8 @@ impl<'a, R: Remote> Session<'a, R> {
 /// - Drive changed, `local` clean: take Drive's
 /// - both changed: three-way merge against the base, save, upload
 ///
-/// A prior dirty local store is saved to `sync/conflict-<utc>.json` before it is replaced.
+/// When a merge dropped an edit, the local store is saved to `sync/conflict-<utc>.json` before
+/// it is replaced.
 /// Several `store.json` files (two machines' first syncs racing) resolve to the oldest; the
 /// others are merged in and deleted. Nothing is written while Drive holds another schema.
 pub async fn sync<R: Remote>(
@@ -443,14 +444,17 @@ pub async fn sync<R: Remote>(
             files.len()
         ));
     }
+    let mut dropped_edit = false;
     for f in extras.iter().filter(|f| !unchanged(f)) {
         let doc = s.fetch(&f.file_id, &f.head_revision_id).await?;
-        with_extras = s.merge(
+        let m = s.merge(
             base_of(f).unwrap_or(&empty),
             &with_extras,
             &doc,
             remote_device(f),
         );
+        dropped_edit |= !m.conflicts.is_empty();
+        with_extras = m.store;
     }
     // Extra copies are deleted below, so what they held counts as a local change.
     let local_changed = dirty || !extras.is_empty();
@@ -462,7 +466,7 @@ pub async fn sync<R: Remote>(
             Outcome::UpToDate
         }
         (true, true, Some(b)) => {
-            s.replace(local, with_extras, dirty)?;
+            s.replace(local, with_extras, dropped_edit)?;
             s.upload(file_id, head.clone(), b.clone(), local).await?;
             Outcome::Pushed
         }
@@ -476,13 +480,14 @@ pub async fn sync<R: Remote>(
         }
         (_, true, b) => {
             let doc = s.fetch(file_id, head).await?;
-            let merged = s.merge(
+            let m = s.merge(
                 b.unwrap_or(&empty),
                 &with_extras,
                 &doc,
                 remote_device(primary),
             );
-            s.replace(local, merged, dirty)?;
+            dropped_edit |= !m.conflicts.is_empty();
+            s.replace(local, m.store, dropped_edit)?;
             if *local == doc {
                 record(paths, primary, &doc)?;
             } else {
@@ -902,42 +907,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn both_changed_merges_and_saves_the_old_local() {
+    async fn disjoint_edits_merge_without_a_conflict_file() {
         let (fake, mut a, mut b) = pair().await;
         a.edit(set_notes(0, 0, "from a"));
         a.sync(&fake).await.unwrap();
         b.edit(set_notes(1, 0, "from b"));
-        let before = b.store.clone();
 
         let r = b.sync(&fake).await.unwrap();
         assert_eq!(r.outcome, Outcome::Merged { conflicts: vec![] });
         for s in [&b.store, &b.on_disk(), &fake.head(0)] {
             assert_eq!((notes(s, 0, 0), notes(s, 1, 0)), ("from a", "from b"));
         }
-        assert_eq!(r.conflict_files, b.conflict_files());
-        let [saved] = &r.conflict_files[..] else {
-            panic!("{:?}", r.conflict_files)
-        };
-        assert_eq!(storage::parse(&fs::read(saved).unwrap()).unwrap(), before);
+        assert!(r.conflict_files.is_empty());
+        assert!(b.conflict_files().is_empty());
 
         // The other machine then just pulls the merge.
         assert_eq!(a.sync(&fake).await.unwrap().outcome, Outcome::Pulled);
         assert_eq!(a.store, b.store);
     }
 
+    /// The later edit wins; the local store that lost it is saved first.
     #[tokio::test]
-    async fn same_edit_on_both_sides_reports_the_conflict() {
+    async fn same_edit_on_both_sides_saves_the_losing_local() {
         let (fake, mut a, mut b) = pair().await;
+        b.edit(set_notes(0, 0, "from b"));
+        let before = b.store.clone();
         a.edit(set_notes(0, 0, "from a"));
         a.sync(&fake).await.unwrap();
-        b.edit(set_notes(0, 0, "from b"));
+
         let r = b.sync(&fake).await.unwrap();
         let Outcome::Merged { conflicts } = &r.outcome else {
             panic!("{:?}", r.outcome)
         };
         assert_eq!(conflicts.len(), 1);
-        let kept = notes(&b.store, 0, 0).to_owned();
-        assert_eq!(notes(&fake.head(0), 0, 0), kept);
+        assert_eq!(notes(&b.store, 0, 0), "from a");
+        assert_eq!(notes(&fake.head(0), 0, 0), "from a");
+        assert_eq!(r.conflict_files, b.conflict_files());
+        let [saved] = &r.conflict_files[..] else {
+            panic!("{:?}", r.conflict_files)
+        };
+        assert_eq!(storage::parse(&fs::read(saved).unwrap()).unwrap(), before);
         let text = describe(&conflicts[0], &b.store);
         assert!(text.starts_with("Mon "), "{text}");
         assert!(text.contains("in \"Base\": kept"), "{text}");

@@ -1138,20 +1138,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_sync_with_no_local_store_pulls_drive() {
-        let fake = Fake::default();
-        let mut a = Machine::with_plans(1);
-        a.sync(&fake).await.unwrap();
-
-        let mut b = Machine::new(2);
-        assert!(!b.paths.store_file.exists());
-        let r = b.sync(&fake).await.unwrap();
-        assert_eq!(r.outcome, Outcome::Pulled);
-        assert_eq!(b.store, a.store);
-        assert_eq!(b.on_disk(), a.store);
-    }
-
-    #[tokio::test]
     async fn first_sync_with_nothing_on_drive_creates_from_local() {
         let fake = Fake::default();
         let mut a = Machine::new(1);

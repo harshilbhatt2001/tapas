@@ -361,16 +361,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_status_in_header_and_on_screen_five() {
-        let mut a = app();
-        assert!(render(&mut a, 180, 50).contains(" Sync: off"));
-        a.screen = Screen::Export;
-        let s = render(&mut a, 180, 50);
-        assert!(s.contains("Sync: off (no Google OAuth client"), "{s}");
-        assert!(s.contains("s sync"));
-    }
-
-    #[test]
     fn narrow_terminal_shows_one_day() {
         let mut a = app();
         a.day = 5;

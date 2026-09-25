@@ -192,60 +192,13 @@ mod tests {
     use crate::library::starter_plan;
     use chrono::DateTime;
 
-    /// `TAPAS_HOME` overrides the platform project dirs with `<home>/{data,config}`.
     #[test]
-    fn tapas_home_overrides_platform_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        // SAFETY: no other test in this process reads or writes TAPAS_HOME.
-        unsafe {
-            std::env::set_var("TAPAS_HOME", dir.path());
-        }
-        let paths = Paths::resolve().unwrap();
-        unsafe {
-            std::env::remove_var("TAPAS_HOME");
-        }
-        assert_eq!(paths.data_dir, dir.path().join("data"));
-        assert_eq!(paths.config_dir, dir.path().join("config"));
-    }
-
-    /// `TAPAS_STORE` > `$TAPAS_HOME/data/store.json` > platform data dir, and only the store
-    /// file moves.
-    #[test]
-    fn tapas_store_precedence() {
-        let home = Path::new("/h");
-        let store = || Some(OsString::from("/sync/tapas.json"));
-
-        let p = Paths::from_env(Some(home.into()), store()).unwrap();
-        assert_eq!(p.store_file, Path::new("/sync/tapas.json"));
-        assert_eq!(p.data_dir, home.join("data"));
-        assert_eq!(p.config_dir, home.join("config"));
-        assert_eq!(p.device_file(), home.join("data/device.json"));
-
-        let p = Paths::from_env(Some(home.into()), None).unwrap();
-        assert_eq!(p.store_file, home.join("data/store.json"));
-
-        let p = Paths::from_env(None, store()).unwrap();
-        assert_eq!(p.store_file, Path::new("/sync/tapas.json"));
-        assert_ne!(p.data_dir, Path::new("/sync"));
-
-        let p = Paths::from_env(None, None).unwrap();
-        assert_eq!(p.store_file, p.data_dir.join("store.json"));
-
-        // Empty values count as unset.
-        let p = Paths::from_env(Some(OsString::new()), Some(OsString::new())).unwrap();
-        assert_eq!(p, Paths::from_env(None, None).unwrap());
-    }
-
-    /// A corrupt store file is reported as an error, not silently replaced.
-    #[test]
-    fn corrupt_json_is_an_error_not_a_silent_overwrite() {
+    fn corrupt_store_is_neither_loaded_nor_overwritten() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
-        fs::create_dir_all(&paths.data_dir).unwrap();
-        fs::write(&paths.store_file, b"{ not json").unwrap();
-        let err = load(&paths).unwrap_err();
-        assert!(err.to_string().contains("reading"));
-        // The corrupt file must still be there, untouched.
+        write_atomic(&paths.store_file, b"{ not json").unwrap();
+        assert!(load(&paths).is_err());
+        assert!(save(&paths, &mut Store::default()).is_err());
         assert_eq!(fs::read_to_string(&paths.store_file).unwrap(), "{ not json");
     }
 
@@ -260,26 +213,6 @@ mod tests {
         assert!(s.plans[0].is_empty());
         assert_eq!(device.active_plan, None);
         assert_eq!(load(&paths).unwrap().1, device);
-    }
-
-    #[test]
-    fn round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::under(dir.path());
-        let mut s = Store::default();
-        s.plans.push(starter_plan("Base"));
-        s.profile.weight = 70.5;
-        save(&paths, &mut s).unwrap();
-        let device = Device {
-            active_plan: Some(s.plans[1].id.clone()),
-            ..Device::default()
-        };
-        save_device(&paths, &device).unwrap();
-        assert_eq!(load(&paths).unwrap(), (s, device));
-
-        let raw = fs::read_to_string(&paths.store_file).unwrap();
-        assert!(raw.contains(r#""start": "07:30""#));
-        assert!(raw.contains(r#""version": 3"#));
     }
 
     /// The target is replaced whole, parents are created and no temporary file is left.

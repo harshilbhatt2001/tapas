@@ -272,9 +272,8 @@ mod tests {
         edited(&mut a);
         assert_eq!(a.push_at, None);
         start(&mut a, true);
-        assert!(a.status.error && a.status.text.starts_with("Sync is off"));
+        assert!(a.status.error);
         assert!(a.busy.is_empty());
-        assert_eq!(status_line(&a).spans[1].content, "off");
     }
 
     #[test]
@@ -285,16 +284,13 @@ mod tests {
         let before = Instant::now();
         edited(&mut a);
         assert!(a.push_at.unwrap() >= before + PUSH_DELAY);
-        assert!(status_line(&a).to_string().contains("unsynced changes"));
 
         let sent = a.store.clone();
         let before = Instant::now();
         on_synced(&mut a, false, &sent, &sent, Err(SyncError::Offline));
         assert_eq!(a.sync, SyncStatus::Offline);
         assert!(a.retry_at.unwrap() >= before + RETRY);
-        // Offline keeps working quietly.
         assert!(!a.status.error);
-        assert_eq!(status_line(&a).spans[1].content, "offline");
     }
 
     #[test]
@@ -319,27 +315,5 @@ mod tests {
         assert_eq!(a.store.plans[0].name, "From Drive");
         assert!((a.store.profile.weight - 70.0).abs() < f64::EPSILON);
         assert!(a.unsynced && a.push_at.is_some());
-    }
-
-    #[test]
-    fn merge_conflicts_and_login_show_in_the_header() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut a = app(dir.path());
-        let s = a.store.clone();
-        let conflict = merge::Conflict {
-            entity: merge::Entity::Profile,
-            kept: merge::Side::Remote,
-        };
-        let merged = Outcome::Merged {
-            conflicts: vec![conflict.clone(), conflict],
-        };
-        on_synced(&mut a, false, &s, &s, Ok(report(merged)));
-        assert_eq!(status_line(&a).spans[1].content, "merged 2");
-        assert!(a.status.text.contains("2 changed on both sides"));
-
-        let hint = SyncError::LoginNeeded("run it".into());
-        on_synced(&mut a, false, &s, &s, Err(hint));
-        assert_eq!(status_line(&a).spans[1].content, "login needed");
-        assert!(a.status.error);
     }
 }

@@ -51,11 +51,12 @@ The package is defined once in `nix/package.nix` and used by both `flake.nix` an
 
 ## Google setup
 
-Calendar push and Health import need your own OAuth client.
+Calendar push, Health import and Drive store sync need your own OAuth client.
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/) create a project.
-2. Enable the **Google Calendar API** and the **Google Health API**.
-3. Configure the OAuth consent screen (External, Testing) and add your Google account as a
+2. Enable the **Google Calendar API**, the **Google Health API** and the **Google Drive API**.
+3. Configure the OAuth consent screen (External, Testing), add the scopes listed below
+   (including `drive.appdata`) under Data access, and add your Google account as a
    **test user**. The Health scopes are Restricted, so only test users can consent until the
    app is verified.
 4. Create an OAuth client ID of type **Desktop app** and download its JSON.
@@ -67,8 +68,11 @@ tapas google login                      # browser consent, caches tokens
 ```
 
 Scopes requested: `calendar.app.created` (tapas only touches the calendar it creates),
+`drive.appdata` (a hidden app folder in your Drive, used to sync the store between machines),
 `googlehealth.activity_and_fitness.readonly`,
-`googlehealth.health_metrics_and_measurements.readonly`.
+`googlehealth.health_metrics_and_measurements.readonly`. Calendar and Drive share one consent;
+if you logged in before Drive sync existed, run `tapas google login --only calendar` again to
+grant `drive.appdata`.
 
 Plans live in the platform data dir (`~/.local/share/tapas` on Linux), the OAuth client and
 tokens in the config dir (`~/.config/tapas`). Set `TAPAS_HOME` to use

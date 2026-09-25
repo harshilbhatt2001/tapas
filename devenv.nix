@@ -42,7 +42,9 @@
     bin="''${CARGO_TARGET_DIR:-${config.devenv.root}/target}/release/tapas"
     home=$(mktemp -d)
     trap 'rm -rf "$home"' EXIT
-    TAPAS_HOME=$home "$bin" plans >/dev/null
+    # The starter week, so the exports have something to write.
+    mkdir -p "$home/data"
+    cp ${config.devenv.root}/benches/fixtures/starter-store.json "$home/data/store.json"
     TAPAS_HOME=$home hyperfine --warmup 3 -N "$@" \
       "$bin plans" \
       "$bin export ics -o /dev/null" \

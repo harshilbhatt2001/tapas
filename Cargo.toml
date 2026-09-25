@@ -35,6 +35,9 @@ tui-input = "0.15"
 tui-popup = "0.7"
 uuid = { version = "1", features = ["serde", "v4"] }
 
+[dev-dependencies]
+proptest = "1"
+
 [profile.release]
 lto = "thin"
 strip = true

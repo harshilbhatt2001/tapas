@@ -135,6 +135,9 @@ fn main() -> Result<()> {
     CompleteEnv::with_factory(Cli::command).complete();
     let cli = Cli::parse();
     let paths = Paths::resolve()?;
+    if let Some(Command::Google { command }) = cli.command {
+        return runtime()?.block_on(google(command, &paths));
+    }
     let (mut store, device) = storage::load(&paths)?;
     match cli.command {
         None => tapas::tui::run(paths, store, device)?,
@@ -170,9 +173,7 @@ fn main() -> Result<()> {
                 None => print!("{text}"),
             }
         }
-        Some(Command::Google { command }) => {
-            runtime()?.block_on(google(command, &paths, &mut store, &device))?;
-        }
+        Some(Command::Google { .. }) => unreachable!("handled before loading the store"),
         Some(Command::Health { command }) => {
             runtime()?.block_on(health(command, &paths, &mut store, &device))?;
         }
@@ -193,12 +194,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .build()?)
 }
 
-async fn google(
-    cmd: GoogleCommand,
-    paths: &Paths,
-    store: &mut Store,
-    device: &Device,
-) -> Result<()> {
+async fn google(cmd: GoogleCommand, paths: &Paths) -> Result<()> {
     match cmd {
         GoogleCommand::Setup { client_secret } => {
             read_application_secret(&client_secret).await.with_context(|| {
@@ -231,7 +227,9 @@ async fn google(
             }
         }
         GoogleCommand::Push { plan, start, weeks } => {
-            let plan = pick_plan(store, device, plan.as_deref())?.clone();
+            let (mut store, device) = storage::load(paths)?;
+            let store = &mut store;
+            let plan = pick_plan(store, &device, plan.as_deref())?.clone();
             let opts = ExportOpts {
                 first_monday: start
                     .unwrap_or_else(|| export::next_monday(Local::now().date_naive())),

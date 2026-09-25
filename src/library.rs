@@ -1,6 +1,6 @@
 //! The built-in session library and starter week.
 
-use chrono::NaiveTime;
+use chrono::{DateTime, NaiveTime};
 use uuid::Uuid;
 
 use crate::model::{Category, Effort, Item, Kind, Library, Plan, SessionType};
@@ -36,6 +36,7 @@ fn ty(
         start,
         counted,
         efforts,
+        updated_at: DateTime::UNIX_EPOCH,
     }
 }
 
@@ -200,6 +201,7 @@ pub fn new_item(lib: &Library, type_key: &str) -> Option<Item> {
         start: t.start,
         dur: e.dur,
         notes: String::new(),
+        updated_at: DateTime::UNIX_EPOCH,
     })
 }
 
@@ -213,6 +215,7 @@ pub fn starter_days() -> [Vec<Item>; 7] {
         start,
         dur,
         notes: notes.into(),
+        updated_at: DateTime::UNIX_EPOCH,
     };
     let wfh = || mk("work", "home", t(9, 0), 480, "");
     let off = |back: NaiveTime, wd: u32| {

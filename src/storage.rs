@@ -8,10 +8,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use directories::ProjectDirs;
 use serde_json::Value;
 
-use crate::model::{Device, STORE_VERSION, Store};
+use crate::{
+    model::{Device, STORE_VERSION, Store},
+    sync::merge,
+};
 
 /// Data and config directories: the platform's project dirs, or `$TAPAS_HOME/{data,config}`.
 /// `$TAPAS_STORE` moves only the store file, for example into a synced folder.
@@ -134,6 +138,7 @@ pub fn migrate(mut doc: Value) -> Result<(Value, Moved)> {
                 "store version {v} is newer than this tapas supports ({STORE_VERSION}); update tapas"
             ),
             1 => moved.active_plan = v1_to_v2(&mut doc)?,
+            2 => v2_to_v3(&mut doc)?,
             v => bail!("unknown store version {v}"),
         }
     }
@@ -157,24 +162,36 @@ fn v1_to_v2(doc: &mut Value) -> Result<Option<String>> {
         .map(str::to_owned))
 }
 
-/// Fail if `file` holds a store with a newer version than this binary knows.
-fn check_not_newer(file: &Path) -> Result<()> {
+/// v3 adds `updated_at` to plans, items, session types, profile and export settings. They
+/// default to the Unix epoch ("never edited"), so only the version moves.
+fn v2_to_v3(doc: &mut Value) -> Result<()> {
+    let obj = doc.as_object_mut().context("store is not a JSON object")?;
+    obj.insert("version".into(), 3.into());
+    Ok(())
+}
+
+/// The store `file` holds, to diff the next save against; `None` when there is none or it
+/// does not parse. Fails if the file has a newer version than this binary knows.
+fn previous(file: &Path) -> Result<Option<Store>> {
     let bytes = match fs::read(file) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };
-    let newer = serde_json::from_slice::<Value>(&bytes)
-        .ok()
-        .and_then(|doc| version_of(&doc).ok())
-        .filter(|v| *v > STORE_VERSION);
-    if let Some(v) = newer {
+    let Ok(doc) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(None);
+    };
+    if let Ok(v) = version_of(&doc)
+        && v > STORE_VERSION
+    {
         bail!(
             "not overwriting {}: store version {v} is newer than this tapas supports ({STORE_VERSION})",
             file.display()
         );
     }
-    Ok(())
+    Ok(migrate(doc)
+        .ok()
+        .and_then(|(doc, _)| serde_json::from_value(doc).ok()))
 }
 
 /// The saved store, migrated to the current version, or `Store::default()` when there is none
@@ -215,8 +232,12 @@ pub fn load(paths: &Paths) -> Result<(Store, Device)> {
 }
 
 /// Save the store, unless the file on disk has a newer version (written by a newer tapas).
-pub fn save(paths: &Paths, store: &Store) -> Result<()> {
-    check_not_newer(&paths.store_file)?;
+/// First stamps `updated_at` on what changed since the file on disk (see [`merge::stamp`]),
+/// in `store` too, so edit sites need not. Without a readable previous file nothing is stamped.
+pub fn save(paths: &Paths, store: &mut Store) -> Result<()> {
+    if let Some(prev) = previous(&paths.store_file)? {
+        merge::stamp(&prev, store, Utc::now());
+    }
     write_atomic(&paths.store_file, &serde_json::to_vec_pretty(store)?)
 }
 
@@ -228,6 +249,7 @@ pub fn save_device(paths: &Paths, device: &Device) -> Result<()> {
 mod tests {
     use super::*;
     use crate::library::starter_plan;
+    use chrono::DateTime;
 
     /// `TAPAS_HOME` overrides the platform project dirs with `<home>/{data,config}`.
     #[test]
@@ -306,7 +328,7 @@ mod tests {
         let mut s = Store::default();
         s.plans.push(starter_plan("Base"));
         s.profile.weight = 70.5;
-        save(&paths, &s).unwrap();
+        save(&paths, &mut s).unwrap();
         let device = Device {
             active_plan: Some(s.plans[1].id.clone()),
             ..Device::default()
@@ -316,7 +338,7 @@ mod tests {
 
         let raw = fs::read_to_string(&paths.store_file).unwrap();
         assert!(raw.contains(r#""start": "07:30""#));
-        assert!(raw.contains(r#""version": 2"#));
+        assert!(raw.contains(r#""version": 3"#));
     }
 
     /// The target is replaced whole, parents are created and no temporary file is left.
@@ -352,7 +374,7 @@ mod tests {
         let (s, v1) = v1_store(1);
         write_atomic(&paths.store_file, &v1).unwrap();
 
-        let (store, device) = load(&paths).unwrap();
+        let (mut store, device) = load(&paths).unwrap();
         assert_eq!(store, s);
         assert_eq!(store.version, STORE_VERSION);
         assert_eq!(device.active_plan.as_deref(), Some(s.plans[1].id.as_str()));
@@ -360,8 +382,8 @@ mod tests {
             serde_json::from_slice(&fs::read(paths.device_file()).unwrap()).unwrap();
         assert_eq!(saved, device);
 
-        // Saving writes v2 without `active`; loading again keeps the device state.
-        save(&paths, &store).unwrap();
+        // Saving writes the current version without `active`; loading again keeps the device.
+        save(&paths, &mut store).unwrap();
         let raw = fs::read_to_string(&paths.store_file).unwrap();
         assert!(!raw.contains(r#""active""#));
         assert_eq!(load(&paths).unwrap().1, device);
@@ -371,9 +393,62 @@ mod tests {
     fn v1_out_of_range_index_picks_the_last_plan() {
         let (s, v1) = v1_store(9);
         let (doc, moved) = migrate(serde_json::from_slice(&v1).unwrap()).unwrap();
-        assert_eq!(doc["version"], 2);
+        assert_eq!(doc["version"], STORE_VERSION);
         assert!(doc.get("active").is_none());
         assert_eq!(moved.active_plan.as_deref(), Some(s.plans[2].id.as_str()));
+    }
+
+    /// A v2 store has no `updated_at` anywhere: it loads with every stamp at the epoch.
+    #[test]
+    fn v2_gains_epoch_stamps() {
+        let mut s = Store::default();
+        s.plans.push(starter_plan("Base"));
+        let mut doc = serde_json::to_value(&s).unwrap();
+        doc["version"] = 2.into();
+        let strip = |v: &mut Value| {
+            v.as_object_mut().unwrap().remove("updated_at");
+        };
+        strip(&mut doc["profile"]);
+        strip(&mut doc["export"]);
+        doc["library"]["types"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .for_each(strip);
+        for plan in doc["plans"].as_array_mut().unwrap() {
+            strip(plan);
+            for day in plan["days"].as_array_mut().unwrap() {
+                day.as_array_mut().unwrap().iter_mut().for_each(strip);
+            }
+        }
+        assert!(!doc.to_string().contains("updated_at"));
+
+        let (doc, moved) = migrate(doc).unwrap();
+        assert_eq!(doc["version"], 3);
+        assert_eq!(moved, Moved::default());
+        let store: Store = serde_json::from_value(doc).unwrap();
+        assert_eq!(store, s);
+        assert_eq!(store.plans[1].days[0][0].updated_at, DateTime::UNIX_EPOCH);
+    }
+
+    /// `save` stamps what changed since the file on disk, in memory and on disk alike.
+    #[test]
+    fn save_stamps_only_what_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let mut s = Store::default();
+        s.plans.push(starter_plan("Base"));
+        save(&paths, &mut s).unwrap();
+        let before = s.clone();
+
+        s.plans[1].days[2][0].notes = "edited".into();
+        save(&paths, &mut s).unwrap();
+        assert!(s.plans[1].days[2][0].updated_at > DateTime::UNIX_EPOCH);
+        let mut unstamped = s.clone();
+        unstamped.plans[1].days[2][0].updated_at = DateTime::UNIX_EPOCH;
+        unstamped.plans[1].days[2][0].notes.clear();
+        assert_eq!(unstamped, before);
+        assert_eq!(load(&paths).unwrap().0, s);
     }
 
     /// A store from a newer tapas is neither loaded nor overwritten.
@@ -389,7 +464,7 @@ mod tests {
 
         let err = format!("{:#}", load(&paths).unwrap_err());
         assert!(err.contains("newer than this tapas supports"), "{err}");
-        let err = format!("{:#}", save(&paths, &Store::default()).unwrap_err());
+        let err = format!("{:#}", save(&paths, &mut Store::default()).unwrap_err());
         assert!(err.contains("not overwriting"), "{err}");
         assert_eq!(fs::read(&paths.store_file).unwrap(), newer);
     }

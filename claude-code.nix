@@ -22,6 +22,12 @@ let
       established crate and use it. Less code to maintain beats clever code.
     - Read the real API of the exact crate version in ~/.cargo/registry/src/*/<crate>-<ver>/
       instead of guessing from memory.
+    - YAGNI. No backwards compatibility: there are no other users, so no migration chains, legacy
+      file handling or compat shims; change formats directly and fail loudly on a version mismatch.
+      No tests for code that can't realistically break (getters, path joins, serde round trips,
+      error text, thin wrappers); test logic that can regress.
+    - Code explains itself through precise, idiomatic Rust names. No comments narrating a fix,
+      a bug avoided or history; comment only what a name can't express.
     - Plans, roadmaps and decisions live in the Obsidian vault at ${vault}
       ("Tapas.md" hub, "Tapas Roadmap.md" checklist, "Tapas Decisions.md" ADR log). Use wikilinks.
   '';

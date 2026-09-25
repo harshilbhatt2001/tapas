@@ -3,7 +3,6 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Days, Local, NaiveDate, Utc};
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 
 const BASE: &str = "https://health.googleapis.com/v4/users/me/dataTypes";
 
@@ -119,12 +118,14 @@ impl Read {
     }
 }
 
-/// All data points of `data_type` matching `filter`, following `nextPageToken`.
-async fn fetch_all<T: DeserializeOwned>(
+/// All data points of `data_type` matching `filter`, following `nextPageToken` and parsing
+/// each page with `parse`.
+async fn fetch_all<T>(
     token: &str,
     data_type: &str,
     read: Read,
     filter: &str,
+    parse: fn(&str) -> Result<Parsed<T>>,
 ) -> Result<Vec<T>> {
     let client = reqwest::Client::new();
     let url = format!("{BASE}/{data_type}/{}", read.path());
@@ -147,28 +148,38 @@ async fn fetch_all<T: DeserializeOwned>(
         if !status.is_success() {
             bail!("Google Health {data_type} failed ({status}): {body}");
         }
-        let page: Page<T> = serde_json::from_str(&body)
-            .with_context(|| format!("parsing Google Health {data_type}: {body}"))?;
-        out.extend(page.data_points);
-        page_token = page.next_page_token.filter(|t| !t.is_empty());
+        let (items, next) =
+            parse(&body).with_context(|| format!("parsing Google Health {data_type}: {body}"))?;
+        out.extend(items);
+        page_token = next.filter(|t| !t.is_empty());
         if page_token.is_none() {
             return Ok(out);
         }
     }
 }
 
-fn latest_weight(points: Vec<WeightPoint>) -> Option<(f64, DateTime<Utc>)> {
-    points
+/// One parsed response page: its items and the next page token.
+pub type Parsed<T> = (Vec<T>, Option<String>);
+
+/// One weight response page: `(kg, measured at)` per complete point, and the next page token.
+pub fn parse_weights(body: &str) -> Result<Parsed<(f64, DateTime<Utc>)>> {
+    let page: Page<WeightPoint> = serde_json::from_str(body)?;
+    let weights = page
+        .data_points
         .into_iter()
         .filter_map(|p| {
             let w = p.weight?;
             Some((w.weight_grams? / 1000.0, w.sample_time?.physical_time?))
         })
-        .max_by_key(|&(_, at)| at)
+        .collect();
+    Ok((weights, page.next_page_token))
 }
 
-fn to_workouts(points: Vec<ExercisePoint>) -> Vec<Workout> {
-    let mut out: Vec<Workout> = points
+/// One exercise response page: its complete points in page order, and the next page token.
+pub fn parse_workouts(body: &str) -> Result<Parsed<Workout>> {
+    let page: Page<ExercisePoint> = serde_json::from_str(body)?;
+    let workouts = page
+        .data_points
         .into_iter()
         .filter_map(|p| {
             let e = p.exercise?;
@@ -182,8 +193,7 @@ fn to_workouts(points: Vec<ExercisePoint>) -> Vec<Workout> {
             })
         })
         .collect();
-    out.sort_by_key(|w| w.start);
-    out
+    Ok((workouts, page.next_page_token))
 }
 
 /// Most recent weight in kg and when it was measured, looking back `since_days`.
@@ -196,9 +206,12 @@ pub async fn latest_weight_kg(
         "weight.sample_time.physical_time >= \"{}\"",
         since.format("%Y-%m-%dT%H:%M:%SZ")
     );
-    Ok(latest_weight(
-        fetch_all(token, "weight", Read::List, &filter).await?,
-    ))
+    Ok(
+        fetch_all(token, "weight", Read::List, &filter, parse_weights)
+            .await?
+            .into_iter()
+            .max_by_key(|&(_, at)| at),
+    )
 }
 
 /// Workouts starting (civil time) on any day from `from` to `to`, both inclusive.
@@ -208,9 +221,9 @@ pub async fn workouts(token: &str, from: NaiveDate, to: NaiveDate) -> Result<Vec
         "exercise.interval.civil_start_time >= \"{from}T00:00:00\" AND \
          exercise.interval.civil_start_time < \"{end}T00:00:00\""
     );
-    Ok(to_workouts(
-        fetch_all(token, "exercise", Read::Reconcile, &filter).await?,
-    ))
+    let mut out = fetch_all(token, "exercise", Read::Reconcile, &filter, parse_workouts).await?;
+    out.sort_by_key(|w| w.start);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -229,9 +242,10 @@ mod tests {
           ],
           "nextPageToken": "abc"
         }"#;
-        let page: Page<WeightPoint> = serde_json::from_str(body).unwrap();
-        assert_eq!(page.next_page_token.as_deref(), Some("abc"));
-        let (kg, at) = latest_weight(page.data_points).unwrap();
+        let (weights, next) = parse_weights(body).unwrap();
+        assert_eq!(next.as_deref(), Some("abc"));
+        assert_eq!(weights.len(), 2);
+        let &(kg, at) = weights.iter().max_by_key(|&&(_, at)| at).unwrap();
         assert!((kg - 71.8505).abs() < 1e-9);
         assert_eq!(
             at.date_naive(),
@@ -241,9 +255,8 @@ mod tests {
 
     #[test]
     fn parses_empty_page() {
-        let page: Page<WeightPoint> = serde_json::from_str("{}").unwrap();
-        assert!(page.data_points.is_empty() && page.next_page_token.is_none());
-        assert!(latest_weight(page.data_points).is_none());
+        let (weights, next) = parse_weights("{}").unwrap();
+        assert!(weights.is_empty() && next.is_none());
     }
 
     #[test]
@@ -262,13 +275,13 @@ mod tests {
             {"exercise": {"exerciseType": "YOGA"}}
           ]
         }"#;
-        let page: Page<ExercisePoint> = serde_json::from_str(body).unwrap();
-        let w = to_workouts(page.data_points);
+        let (w, next) = parse_workouts(body).unwrap();
+        assert!(next.is_none());
         assert_eq!(w.len(), 2);
-        assert_eq!(w[0].exercise_type, "STRENGTH_TRAINING");
-        assert_eq!((w[0].minutes, w[0].kcal), (60, None));
-        assert_eq!(w[1].exercise_type, "RUNNING");
-        assert_eq!((w[1].minutes, w[1].kcal), (45, Some(512.5)));
+        assert_eq!(w[0].exercise_type, "RUNNING");
+        assert_eq!((w[0].minutes, w[0].kcal), (45, Some(512.5)));
+        assert_eq!(w[1].exercise_type, "STRENGTH_TRAINING");
+        assert_eq!((w[1].minutes, w[1].kcal), (60, None));
     }
 
     #[test]

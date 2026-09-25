@@ -19,8 +19,10 @@ clap_complete = { version = "4.6.11", features = ["unstable-dynamic"] }
 csv = "1"
 directories = "6"
 google-calendar3 = "7"
+google-drive3 = "7"
 iana-time-zone = "0.1"
 icalendar = "0.17"
+mime = "0.3"
 open = "5"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -272,13 +272,16 @@ impl Default for ExportSettings {
     }
 }
 
+/// Schema version of [`Store`] this binary reads and writes.
+pub const STORE_VERSION: u32 = 2;
+
+/// The synced document. Per-machine state lives in [`Device`].
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Store {
     pub version: u32,
     pub profile: Profile,
     pub library: Library,
     pub plans: Vec<Plan>,
-    pub active: usize,
     #[serde(default)]
     pub export: ExportSettings,
 }
@@ -286,23 +289,29 @@ pub struct Store {
 impl Default for Store {
     fn default() -> Self {
         Store {
-            version: 1,
+            version: STORE_VERSION,
             profile: Profile::default(),
             library: crate::library::default_library(),
             plans: vec![Plan::new("Week 1")],
-            active: 0,
             export: ExportSettings::default(),
         }
     }
 }
 
 impl Store {
+    /// Index of the plan with `id`, or of the first plan when there is none.
     #[must_use]
-    pub fn plan(&self) -> &Plan {
-        &self.plans[self.active.min(self.plans.len() - 1)]
+    pub fn plan_index(&self, id: Option<&str>) -> usize {
+        id.and_then(|id| self.plans.iter().position(|p| p.id == id))
+            .unwrap_or(0)
     }
-    pub fn plan_mut(&mut self) -> &mut Plan {
-        let i = self.active.min(self.plans.len() - 1);
+    /// The plan with `id`, or the first plan.
+    #[must_use]
+    pub fn plan_or_first(&self, id: Option<&str>) -> &Plan {
+        &self.plans[self.plan_index(id)]
+    }
+    pub fn plan_or_first_mut(&mut self, id: Option<&str>) -> &mut Plan {
+        let i = self.plan_index(id);
         &mut self.plans[i]
     }
     /// Repair invariants after loading or editing.
@@ -310,7 +319,6 @@ impl Store {
         if self.plans.is_empty() {
             self.plans.push(Plan::new("Week 1"));
         }
-        self.active = self.active.min(self.plans.len() - 1);
         self.export.weeks = self.export.weeks.clamp(1, 52);
     }
     #[must_use]
@@ -318,6 +326,24 @@ impl Store {
         self.plans
             .iter()
             .find(|p| p.name.eq_ignore_ascii_case(name) || p.id == name)
+    }
+}
+
+/// State of this machine only, kept next to the store and never synced.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Device {
+    pub device_id: Uuid,
+    /// Id of the plan the TUI and CLI work on; the first plan when unset or gone.
+    #[serde(default)]
+    pub active_plan: Option<String>,
+}
+
+impl Default for Device {
+    fn default() -> Self {
+        Device {
+            device_id: Uuid::new_v4(),
+            active_plan: None,
+        }
     }
 }
 

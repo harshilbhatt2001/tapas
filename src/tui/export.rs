@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{Datelike, Local, NaiveDate, Weekday};
 use directories::UserDirs;
 use ratatui::{
@@ -21,7 +21,7 @@ use super::{
 use crate::{
     export::{self, ExportOpts},
     google::{auth::Api, calendar::PushReport, health::Workout},
-    services,
+    services, storage,
 };
 
 pub fn opts(app: &App) -> ExportOpts {
@@ -99,7 +99,7 @@ fn file_name(plan: &str, ext: &str) -> String {
 
 fn write(app: &mut App, ext: &str) {
     let res = (|| -> Result<PathBuf> {
-        let plan = app.store.plan();
+        let plan = app.plan();
         let o = opts(app);
         let events = export::events(&app.store, plan, &o);
         anyhow::ensure!(!events.is_empty(), "nothing to export");
@@ -109,7 +109,7 @@ fn write(app: &mut App, ext: &str) {
             export::to_google_csv(&events, o.weeks)?
         };
         let path = out_dir().join(file_name(&plan.name, ext));
-        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        storage::write_atomic(&path, text.as_bytes())?;
         Ok(path)
     })();
     match res {
@@ -127,7 +127,7 @@ fn push(app: &mut App) {
         return;
     }
     let (paths, store, o) = (app.paths.clone(), app.store.clone(), opts(app));
-    let plan = store.plan().clone();
+    let plan = app.plan().clone();
     app.spawn(Task::Push, async move {
         let res = services::push_plan(&paths, &store, &plan, &o).await;
         BgResult::Pushed {
@@ -247,7 +247,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Table::new(rows, [Constraint::Length(16), Constraint::Fill(1)]).block(
             Block::bordered()
-                .title(format!(" Export {} ", app.store.plan().name))
+                .title(format!(" Export {} ", app.plan().name))
                 .title_bottom(
                     Line::from(
                         " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts ",

@@ -14,7 +14,7 @@ use super::{editor, export, library, plans, profile, week, widgets::Form};
 use crate::{
     export as ex,
     google::{calendar::PushReport, health::Workout},
-    model::Store,
+    model::{Device, Plan, Store},
     storage::{self, Paths},
 };
 
@@ -158,6 +158,7 @@ pub enum LibFocus {
 pub struct App {
     pub paths: Paths,
     pub store: Store,
+    pub device: Device,
     pub screen: Screen,
     pub modal: Modal,
     /// Selected day and card (index into the day sorted by start).
@@ -183,11 +184,12 @@ pub struct App {
 
 impl App {
     #[must_use]
-    pub fn new(paths: Paths, store: Store) -> App {
-        let plan_sel = store.active;
+    pub fn new(paths: Paths, store: Store, device: Device) -> App {
+        let plan_sel = store.plan_index(device.active_plan.as_deref());
         App {
             paths,
             store,
+            device,
             screen: Screen::Week,
             modal: Modal::None,
             day: 0,
@@ -212,6 +214,28 @@ impl App {
         }
     }
 
+    /// The active plan: this device's choice, or the first plan.
+    #[must_use]
+    pub fn plan(&self) -> &Plan {
+        self.store.plan_or_first(self.device.active_plan.as_deref())
+    }
+
+    pub fn plan_mut(&mut self) -> &mut Plan {
+        self.store
+            .plan_or_first_mut(self.device.active_plan.as_deref())
+    }
+
+    /// Index of the active plan in `store.plans`.
+    #[must_use]
+    pub fn active(&self) -> usize {
+        self.store.plan_index(self.device.active_plan.as_deref())
+    }
+
+    /// Make plan `i` active on this device; saved by the next [`App::commit`].
+    pub fn set_active(&mut self, i: usize) {
+        self.device.active_plan = self.store.plans.get(i).map(|p| p.id.clone());
+    }
+
     pub fn info(&mut self, text: impl Into<String>) {
         self.status = Status {
             text: text.into(),
@@ -230,7 +254,9 @@ impl App {
     pub fn commit(&mut self) {
         self.store.normalize();
         self.clamp();
-        match storage::save(&self.paths, &self.store) {
+        let saved = storage::save(&self.paths, &self.store)
+            .and_then(|()| storage::save_device(&self.paths, &self.device));
+        match saved {
             Ok(()) => self.info("Saved"),
             Err(e) => self.error(format!("Save failed: {e:#}")),
         }
@@ -239,7 +265,7 @@ impl App {
     /// Keep selections inside their lists.
     pub fn clamp(&mut self) {
         self.day = self.day.min(6);
-        let n = self.store.plan().days[self.day].len();
+        let n = self.plan().days[self.day].len();
         self.card = self.card.min(n.saturating_sub(1));
         self.plan_sel = self.plan_sel.min(self.store.plans.len() - 1);
         let types = &self.store.library.types;

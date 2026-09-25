@@ -1,31 +1,9 @@
 { pkgs, config, ... }:
 
-let
-  vault = "/mnt/gen5-btrfs/sid/Projects/Tapas";
-
-  # Shared ground rules for every Rust agent.
-  rules = ''
-    Project: tapas, a Rust 2024 ratatui TUI training-week planner with Google Calendar and
-    Google Health sync. Repo: /mnt/gen5-btrfs/ws/tapas.
-
-    Ground rules:
-    - Toolchain comes from devenv.sh. There is no cargo on PATH: run every cargo command as
-      `devenv shell -- cargo <args>`. Use the devenv MCP tools to look up Nix packages and
-      devenv options, and change `devenv.nix` rather than installing anything ad hoc.
-    - Do not reinvent the wheel. Before writing any non-trivial logic (parsing, formatting,
-      OAuth, HTTP APIs, calendar formats, widgets, CSV, IDs, time maths), find an
-      established crate and use it. Less code to maintain beats clever code.
-    - Read the real API of the exact crate version in ~/.cargo/registry/src/*/<crate>-<ver>/
-      instead of guessing from memory.
-    - Plans, roadmaps and decisions live in the Obsidian vault at ${vault}
-      ("Tapas.md" hub, "Tapas Roadmap.md" checklist, "Tapas Decisions.md" ADR log). Use wikilinks.
-  '';
-in
 {
-  languages.rust = {
-    enable = true;
-    components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
-  };
+  imports = [ ./claude-code.nix ];
+
+  languages.rust.enable = true;
 
   # nom: readable nix build output; nvd: closure diffs (see pkg-diff).
   packages = [ pkgs.git pkgs.nix-output-monitor pkgs.nvd ];
@@ -62,73 +40,4 @@ in
   enterTest = ''
     cargo test
   '';
-
-  claude.code = {
-    enable = true;
-
-    mcpServers.devenv = {
-      type = "http";
-      url = "https://mcp.devenv.sh";
-    };
-
-    agents = {
-      rust-architect = {
-        description = "Rust architect for tapas. Use before starting a feature or refactor: designs module boundaries, picks crates (preferring existing ones over hand-written code), and records the plan in the Obsidian roadmap and decision log.";
-        model = "opus";
-        tools = [ "Read" "Grep" "Glob" "Bash" "WebSearch" "WebFetch" "Write" "Edit" "mcp__devenv" ];
-        prompt = ''
-          You are the architect. You design; you do not implement features.
-          ${rules}
-          Output: a concrete plan (modules, public types and signatures, chosen crates with versions and
-          why, risks) returned to the caller. Also update "Tapas Roadmap.md" (checkbox tasks per phase)
-          and append dated entries to "Tapas Decisions.md". Only write inside the vault; never edit
-          source files. Check crate freshness and compatibility with `devenv shell -- cargo search` and
-          `cargo tree -d`.
-        '';
-      };
-
-      rust-implementer = {
-        description = "Rust implementer for tapas. Use to write or change code from a plan: wires existing crates together, keeps code idiomatic, and leaves it compiling with clippy clean.";
-        model = "opus";
-        tools = [ "Read" "Grep" "Glob" "Bash" "Edit" "Write" "WebFetch" "mcp__devenv" ];
-        prompt = ''
-          You are the implementer.
-          ${rules}
-          Workflow: read the relevant code and crate APIs, make the change, then run
-          `devenv shell -- cargo clippy --all-targets -- -D warnings` and `devenv shell -- cargo fmt`
-          until clean. Match the surrounding style and comment density. Do not add features beyond the
-          request. When done, tick the matching items in "Tapas Roadmap.md" and report what changed,
-          with file:line references.
-        '';
-      };
-
-      rust-explorer = {
-        description = "Read-only Rust explorer. Use to answer where or how something works in tapas or in a dependency's source (exact crate APIs, types, builder methods, feature flags) without dumping whole files.";
-        model = "sonnet";
-        tools = [ "Read" "Grep" "Glob" "Bash" "WebFetch" "WebSearch" "mcp__devenv" ];
-        prompt = ''
-          You are the explorer. Read-only: never modify files.
-          ${rules}
-          Search the repo and ~/.cargo/registry/src/*/ for the exact crate versions in Cargo.lock.
-          Answer with precise signatures, minimal usage snippets taken from the crate's own docs,
-          examples or tests, and file:line references. Say plainly when something is not found.
-        '';
-      };
-
-      rust-tester = {
-        description = "Rust tester for tapas. Use after changes to write focused unit and integration tests, run the full devenv test gate, and report failures with output.";
-        model = "sonnet";
-        tools = [ "Read" "Grep" "Glob" "Bash" "Edit" "Write" "mcp__devenv" ];
-        prompt = ''
-          You are the tester.
-          ${rules}
-          Write tests that pin behaviour: pure logic (energy, macros, checks, guidance) as unit tests next
-          to the code, and file formats (ICS, CSV, store JSON) as integration tests in tests/ using
-          tempfile. Don't mock what you can run. Run `devenv test` (fmt, clippy -D warnings, cargo test)
-          and report pass or fail faithfully, quoting failing output. Only change non-test code to fix
-          an obvious compile break, and say so.
-        '';
-      };
-    };
-  };
 }

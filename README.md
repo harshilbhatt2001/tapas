@@ -22,6 +22,17 @@ With Cargo (Rust 1.98+):
 cargo install --locked --path .
 ```
 
+### Shell completion
+
+The Nix package installs completions for bash, fish and zsh. With a Cargo install, register
+them yourself; `--plan` completes your saved plan names.
+
+```sh
+echo 'COMPLETE=fish tapas | source' > ~/.config/fish/completions/tapas.fish   # fish
+echo 'source <(COMPLETE=bash tapas)' >> ~/.bashrc                            # bash
+echo 'source <(COMPLETE=zsh tapas)' >> ~/.zshrc                              # zsh
+```
+
 ## Development
 
 The toolchain comes from [devenv](https://devenv.sh); there is no global cargo.

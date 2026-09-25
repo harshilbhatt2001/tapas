@@ -1,5 +1,10 @@
 # Single definition of the tapas package, shared by flake.nix and devenv.nix.
-{ lib, rustPlatform }:
+{
+  lib,
+  stdenv,
+  rustPlatform,
+  installShellFiles,
+}:
 
 let
   cargoToml = lib.importTOML ../Cargo.toml;
@@ -19,6 +24,15 @@ rustPlatform.buildRustPackage {
   };
 
   cargoLock.lockFile = ../Cargo.lock;
+
+  # Dynamic completions: each script calls back into the binary, so plan names stay current.
+  nativeBuildInputs = [ installShellFiles ];
+  postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
+    installShellCompletion --cmd tapas \
+      --bash <(COMPLETE=bash $out/bin/tapas) \
+      --fish <(COMPLETE=fish $out/bin/tapas) \
+      --zsh <(COMPLETE=zsh $out/bin/tapas)
+  '';
 
   meta = {
     inherit (cargoToml.package) description;

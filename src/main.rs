@@ -139,7 +139,8 @@ fn main() -> Result<()> {
             };
             match output {
                 Some(file) => {
-                    storage::write_atomic(&file, text.as_bytes())?;
+                    fs::write(&file, &text)
+                        .with_context(|| format!("writing {}", file.display()))?;
                 }
                 None => print!("{text}"),
             }

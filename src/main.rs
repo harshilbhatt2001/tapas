@@ -381,8 +381,11 @@ async fn sync_status(paths: &Paths, store: &Store) -> Result<()> {
             if let Some(f) = files.first() {
                 let base = state.as_ref().map_or("none", |s| s.base_head.as_str());
                 println!("  head revision {}, last synced {base}", f.head_revision_id);
-                if let Some(v) = f.schema.filter(|v| *v > STORE_VERSION) {
-                    println!("  written by a newer tapas (store version {v}); update tapas here");
+                if f.schema != Some(STORE_VERSION) {
+                    let v = f
+                        .schema
+                        .map_or_else(|| "none".to_owned(), |v| v.to_string());
+                    println!("  schema {v}, but this tapas reads only version {STORE_VERSION}");
                 }
             }
             if files.len() > 1 {

@@ -89,18 +89,44 @@ struct MetricsSummary {
     calories_kcal: Option<f64>,
 }
 
+/// How to read a data type's points.
+#[derive(Clone, Copy)]
+enum Read {
+    /// Every point from every source (`dataPoints`).
+    List,
+    /// One point per real-world event, merged across sources (`dataPoints:reconcile`), so a
+    /// ride synced by both Fitbit and Health Connect counts once. Exercise pages hold at most 25.
+    Reconcile,
+}
+
+impl Read {
+    fn path(self) -> &'static str {
+        match self {
+            Read::List => "dataPoints",
+            Read::Reconcile => "dataPoints:reconcile",
+        }
+    }
+    fn page_size(self) -> &'static str {
+        match self {
+            Read::List => "1000",
+            Read::Reconcile => "25",
+        }
+    }
+}
+
 /// All data points of `data_type` matching `filter`, following `nextPageToken`.
 async fn fetch_all<T: DeserializeOwned>(
     token: &str,
     data_type: &str,
+    read: Read,
     filter: &str,
 ) -> Result<Vec<T>> {
     let client = reqwest::Client::new();
-    let url = format!("{BASE}/{data_type}/dataPoints");
+    let url = format!("{BASE}/{data_type}/{}", read.path());
     let mut out = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
-        let mut query = vec![("filter", filter), ("pageSize", "1000")];
+        let mut query = vec![("filter", filter), ("pageSize", read.page_size())];
         if let Some(p) = &page_token {
             query.push(("pageToken", p));
         }
@@ -165,7 +191,9 @@ pub async fn latest_weight_kg(
         "weight.sample_time.physical_time >= \"{}\"",
         since.format("%Y-%m-%dT%H:%M:%SZ")
     );
-    Ok(latest_weight(fetch_all(token, "weight", &filter).await?))
+    Ok(latest_weight(
+        fetch_all(token, "weight", Read::List, &filter).await?,
+    ))
 }
 
 /// Workouts starting (civil time) on any day from `from` to `to`, both inclusive.
@@ -175,7 +203,9 @@ pub async fn workouts(token: &str, from: NaiveDate, to: NaiveDate) -> Result<Vec
         "exercise.interval.civil_start_time >= \"{from}T00:00:00\" AND \
          exercise.interval.civil_start_time < \"{end}T00:00:00\""
     );
-    Ok(to_workouts(fetch_all(token, "exercise", &filter).await?))
+    Ok(to_workouts(
+        fetch_all(token, "exercise", Read::Reconcile, &filter).await?,
+    ))
 }
 
 #[cfg(test)]

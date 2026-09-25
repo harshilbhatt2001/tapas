@@ -93,6 +93,9 @@ enum HealthCommand {
         /// Any day of the week (YYYY-MM-DD); this week by default.
         #[arg(long)]
         start: Option<NaiveDate>,
+        /// Also list commute rides (bike rides under 30 min or under 6 MET), which never count.
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -225,19 +228,26 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
                 println!("Profile weight set to {kg} kg");
             }
         }
-        HealthCommand::Week { start } => {
+        HealthCommand::Week { start, all } => {
             let monday = sync::week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
             let workouts = sync::week_workouts(paths, monday).await?;
             let plan = store.plan();
-            let days = sync::planned_vs_done(&store.library, plan, monday, &workouts);
+            let days = sync::planned_vs_done(
+                &store.library,
+                plan,
+                monday,
+                &workouts,
+                store.profile.weight,
+            );
             println!("{} vs Google Health, week of {monday}", plan.name);
+            let mut hidden = 0;
             for (d, day) in days.iter().enumerate() {
-                let what = day
-                    .done
-                    .iter()
-                    .map(|w| format!("{} {}", sync::workout_label(w), hm(w.minutes.into())))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let mut what = sync::workouts_text(&day.done);
+                if all && !day.commutes.is_empty() {
+                    let sep = if what.is_empty() { "" } else { "; " };
+                    what = format!("{what}{sep}commute: {}", sync::workouts_text(&day.commutes));
+                }
+                hidden += day.commutes.len();
                 println!(
                     "{}  planned {:>5} ({})  done {:>5} ({})  {what}",
                     DAYS[d],
@@ -246,6 +256,9 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
                     hm(day.done_min().into()),
                     day.done.len(),
                 );
+            }
+            if !all && hidden > 0 {
+                println!("{hidden} commute rides not counted; --all lists them");
             }
         }
     }

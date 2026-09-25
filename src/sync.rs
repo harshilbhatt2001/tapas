@@ -13,7 +13,7 @@ use crate::{
         calendar::{self, CalEvent, PushReport},
         health::{self, Workout},
     },
-    model::{Kind, Library, Plan, Store},
+    model::{Kind, Library, Plan, Store, hm},
     storage::Paths,
 };
 
@@ -45,9 +45,38 @@ pub fn workout_label(w: &Workout) -> String {
     )
 }
 
+/// `bike 2h22, walking 21m`
+pub fn workouts_text(workouts: &[Workout]) -> String {
+    workouts
+        .iter()
+        .map(|w| format!("{} {}", workout_label(w), hm(w.minutes.into())))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Monday of the week containing `d`.
 pub fn week_monday(d: NaiveDate) -> NaiveDate {
     d.week(Weekday::Mon).first_day()
+}
+
+/// Bike rides shorter than this are commutes, not training.
+pub const MIN_TRAINING_RIDE_MIN: u32 = 30;
+/// Bike rides below this effort are commutes. MET is Google's calories per kg of body weight per
+/// hour; on real data commutes measured 5.3–5.6 and training rides 6.9–8.4.
+pub const MIN_TRAINING_RIDE_MET: f64 = 6.0;
+
+/// A bike ride too short or too easy to count as training, such as a commute. Without calories,
+/// duration alone decides.
+pub fn is_commute(w: &Workout, weight_kg: f64) -> bool {
+    if workout_kind(w) != Some(Kind::Bike) {
+        return false;
+    }
+    if w.minutes < MIN_TRAINING_RIDE_MIN {
+        return true;
+    }
+    w.kcal.is_some_and(|kcal| {
+        kcal / weight_kg / (f64::from(w.minutes) / 60.0) < MIN_TRAINING_RIDE_MET
+    })
 }
 
 /// Planned training and recorded workouts of one day.
@@ -55,7 +84,10 @@ pub fn week_monday(d: NaiveDate) -> NaiveDate {
 pub struct DayDone {
     pub planned: usize,
     pub planned_min: u32,
+    /// Workouts that count as training.
     pub done: Vec<Workout>,
+    /// Commute rides: kept for display but never counted (see [`is_commute`]).
+    pub commutes: Vec<Workout>,
 }
 
 impl DayDone {
@@ -65,11 +97,13 @@ impl DayDone {
 }
 
 /// Training items of `plan` next to the workouts that started in the week from `monday`.
+/// `weight_kg` turns calories into effort for [`is_commute`].
 pub fn planned_vs_done(
     lib: &Library,
     plan: &Plan,
     monday: NaiveDate,
     workouts: &[Workout],
+    weight_kg: f64,
 ) -> [DayDone; 7] {
     let mut out: [DayDone; 7] = Default::default();
     for (d, items) in plan.days.iter().enumerate() {
@@ -80,7 +114,12 @@ pub fn planned_vs_done(
     for w in workouts {
         let day = (w.start.date_naive() - monday).num_days();
         if let Ok(d @ 0..7) = usize::try_from(day) {
-            out[d].done.push(w.clone());
+            let list = if is_commute(w, weight_kg) {
+                &mut out[d].commutes
+            } else {
+                &mut out[d].done
+            };
+            list.push(w.clone());
         }
     }
     out
@@ -165,4 +204,63 @@ pub async fn week_workouts(paths: &Paths, monday: NaiveDate) -> Result<Vec<Worko
     let auth = authenticator(paths, Api::Health).await?;
     let token = auth::access_token(&auth, Api::Health.scopes()).await?;
     health::workouts(&token, monday, monday + Days::new(6)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Local, TimeZone};
+
+    use super::*;
+    use crate::library::default_library;
+
+    fn ride(ty: &str, day: u32, minutes: u32, kcal: Option<f64>) -> Workout {
+        Workout {
+            exercise_type: ty.into(),
+            start: Local.with_ymd_and_hms(2026, 9, day, 12, 0, 0).unwrap(),
+            minutes,
+            kcal,
+        }
+    }
+
+    // Real rides from Google Health, weight 71.1 kg.
+    #[test]
+    fn commute_rides_by_duration_and_effort() {
+        let kg = 71.1;
+        // Short rides are commutes whatever the effort, and without calories.
+        assert!(is_commute(&ride("BIKING", 23, 15, Some(95.0)), kg));
+        assert!(is_commute(&ride("BIKING", 23, 11, Some(88.0)), kg));
+        assert!(is_commute(&ride("BIKING", 6, 25, None), kg));
+        // 33 min but 5.6 MET: a commute.
+        assert!(is_commute(&ride("BIKING", 6, 33, Some(219.0)), kg));
+        // Training rides: 6.9, 8.4 and 7.5 MET.
+        assert!(!is_commute(&ride("BIKING", 18, 149, Some(1220.0)), kg));
+        assert!(!is_commute(&ride("BIKING", 16, 56, Some(557.0)), kg));
+        assert!(!is_commute(&ride("BIKING", 22, 142, Some(1270.0)), kg));
+        // 30 min or more without calories counts.
+        assert!(!is_commute(&ride("BIKING", 6, 30, None), kg));
+        // Only bikes: a short walk or run is never a commute ride.
+        assert!(!is_commute(&ride("WALKING", 22, 21, Some(164.0)), kg));
+        assert!(!is_commute(&ride("RUNNING", 22, 20, Some(150.0)), kg));
+    }
+
+    #[test]
+    fn commutes_are_kept_but_not_counted() {
+        let lib = default_library();
+        let plan = Plan::new("Week");
+        let monday = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+        let workouts = [
+            ride("BIKING", 22, 142, Some(1270.0)),
+            ride("WALKING", 22, 21, Some(164.0)),
+            ride("BIKING", 23, 15, Some(95.0)),
+            ride("BIKING", 23, 14, Some(109.0)),
+        ];
+        let days = planned_vs_done(&lib, &plan, monday, &workouts, 71.1);
+        assert_eq!(days[1].done.len(), 2);
+        assert_eq!(days[1].done_min(), 163);
+        assert!(days[1].commutes.is_empty());
+        assert!(days[2].done.is_empty());
+        assert_eq!(days[2].done_min(), 0);
+        assert_eq!(days[2].commutes.len(), 2);
+        assert_eq!(workouts_text(&days[2].commutes), "bike 15m, bike 14m");
+    }
 }

@@ -79,6 +79,14 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('y') => duplicate(app),
+        KeyCode::Char('c') => {
+            app.show_commutes = !app.show_commutes;
+            app.info(if app.show_commutes {
+                "Commute rides shown (not counted as training)"
+            } else {
+                "Commute rides hidden"
+            });
+        }
         KeyCode::Char('d') => {
             if let Some(id) = selected_id(app) {
                 let label = app
@@ -262,8 +270,9 @@ fn card<'a>(app: &App, it: &Item, clash: bool, selected: bool) -> Paragraph<'a> 
         .wrap(Wrap { trim: true })
 }
 
-/// `Done 1h05 (2) of 1h30 (2)`, plus a short list of what was done.
-fn done_lines(done: &DayDone) -> Vec<Line<'static>> {
+/// `Done 1h05 (2) of 1h30 (2)`, plus a short list of what was done. Commute rides never count;
+/// they are listed when `show_commutes`, otherwise only hinted at.
+fn done_lines(done: &DayDone, show_commutes: bool) -> Vec<Line<'static>> {
     let ok = done.done_min() >= done.planned_min && !done.done.is_empty();
     let style = if done.done.is_empty() && done.planned > 0 {
         Style::new().fg(WARN)
@@ -272,7 +281,7 @@ fn done_lines(done: &DayDone) -> Vec<Line<'static>> {
     } else {
         Style::new()
     };
-    let mut out = vec![Line::styled(
+    let mut head = vec![Span::styled(
         format!(
             "Done {} ({}) of {} ({})",
             hm(done.done_min().into()),
@@ -282,14 +291,24 @@ fn done_lines(done: &DayDone) -> Vec<Line<'static>> {
         ),
         style,
     )];
+    if !show_commutes && !done.commutes.is_empty() {
+        head.push(Span::styled(
+            format!(" +{} commute", done.commutes.len()),
+            Style::new().fg(DIM),
+        ));
+    }
+    let mut out = vec![Line::from(head)];
     if !done.done.is_empty() {
-        let what = done
-            .done
-            .iter()
-            .map(|w| format!("{} {}", sync::workout_label(w), hm(w.minutes.into())))
-            .collect::<Vec<_>>()
-            .join(", ");
-        out.push(Line::styled(what, Style::new().fg(DIM)));
+        out.push(Line::styled(
+            sync::workouts_text(&done.done),
+            Style::new().fg(DIM),
+        ));
+    }
+    if show_commutes && !done.commutes.is_empty() {
+        out.push(Line::styled(
+            format!("commute: {}", sync::workouts_text(&done.commutes)),
+            Style::new().fg(DIM).italic(),
+        ));
     }
     out
 }
@@ -331,12 +350,20 @@ fn draw_day(
         card: None,
     });
 
-    let done_lines = done.map(done_lines).unwrap_or_default();
+    let show = app.show_commutes;
+    let done_par = Paragraph::new(done.map(|d| done_lines(d, show)).unwrap_or_default())
+        .wrap(Wrap { trim: true });
+    // Wrapped rows, not lines: narrow columns wrap the Done and commute lists.
+    let done_rows = if done.is_some() {
+        done_par.line_count(inner.width) as u16
+    } else {
+        0
+    };
     let fuel_rows = if wide { 2 } else { 1 };
     let [gauge, fuel, done_area, _, cards] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(fuel_rows),
-        Constraint::Length(done_lines.len() as u16),
+        Constraint::Length(done_rows),
         Constraint::Length(1),
         Constraint::Fill(1),
     ])
@@ -370,10 +397,7 @@ fn draw_day(
         ])]
     };
     f.render_widget(Paragraph::new(fuel_text), fuel);
-    f.render_widget(
-        Paragraph::new(done_lines).wrap(Wrap { trim: true }),
-        done_area,
-    );
+    f.render_widget(done_par, done_area);
 
     let plan = app.store.plan();
     let items: Vec<Item> = plan.sorted_day(d).into_iter().cloned().collect();
@@ -447,10 +471,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         Layout::vertical([Constraint::Fill(1), Constraint::Length(lower_h)]).areas(area);
 
     let clashes = calc::clashes(&plan);
-    let done = app
-        .done
-        .as_ref()
-        .map(|(monday, w)| (*monday, sync::planned_vs_done(lib, &plan, *monday, w)));
+    let done = app.done.as_ref().map(|(monday, w)| {
+        (
+            *monday,
+            sync::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
+        )
+    });
     let done_day = |d: usize| done.as_ref().map(|(_, days)| days[d].clone());
     app.hits.clear();
     let wide = area.width >= WIDE;

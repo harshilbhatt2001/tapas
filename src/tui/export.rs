@@ -174,9 +174,12 @@ fn fetch_workouts(app: &mut App) {
 pub fn on_workouts(app: &mut App, monday: NaiveDate, res: Result<Vec<Workout>>) {
     match res {
         Ok(w) => {
+            let weight = app.store.profile.weight;
+            let commutes = w.iter().filter(|x| sync::is_commute(x, weight)).count();
             app.info(format!(
-                "{} workouts this week from Google Health; see the Done lines on screen 1",
-                w.len()
+                "{} workouts and {commutes} commute rides this week from Google Health; see the \
+                 Done lines on screen 1 (c shows commutes)",
+                w.len() - commutes
             ));
             app.done = Some((monday, w));
             app.screen = Screen::Week;

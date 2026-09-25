@@ -171,6 +171,8 @@ pub struct App {
     pub last_file: Option<PathBuf>,
     /// Workouts fetched from Google Health for the week starting at the date.
     pub done: Option<(NaiveDate, Vec<Workout>)>,
+    /// Show commute rides next to the Done line (off by default; `c` on the week screen).
+    pub show_commutes: bool,
     pub status: Status,
     pub busy: BTreeSet<Task>,
     pub tick: usize,
@@ -196,6 +198,7 @@ impl App {
             first_monday: ex::next_monday(Local::now().date_naive()),
             last_file: None,
             done: None,
+            show_commutes: false,
             status: Status {
                 text: "Loaded. Press ? for keys.".into(),
                 error: false,

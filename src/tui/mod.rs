@@ -214,6 +214,7 @@ fn help(screen: Screen) -> Text<'static> {
             ("< >", "move session to previous / next day"),
             ("S", "load the starter week"),
             ("X", "clear the week"),
+            ("c", "show / hide commute rides from Google Health"),
             ("click", "select a session or day"),
         ],
         Screen::Plans => &[

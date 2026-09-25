@@ -1,0 +1,38 @@
+[package]
+name = "tapas"
+version = "0.1.0"
+edition = "2024"
+description = "Terminal training-week planner with Google Calendar and Google Health sync"
+license = "MIT"
+readme = "README.md"
+keywords = ["tui", "training", "planner", "calendar", "fitness"]
+categories = ["command-line-utilities"]
+rust-version = "1.98"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+directories = "6"
+google-calendar3 = "7"
+iana-time-zone = "0.1"
+icalendar = "0.17"
+open = "5"
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slug = "0.1.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tui-input = "0.15"
+tui-popup = "0.7"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true

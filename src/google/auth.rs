@@ -1,0 +1,113 @@
+//! OAuth installed flow (browser redirect) with tokens cached on disk.
+
+use std::future::Future;
+use std::path::Path;
+use std::pin::Pin;
+
+use anyhow::{Context, Result};
+use google_calendar3::yup_oauth2::authenticator::Authenticator;
+use google_calendar3::yup_oauth2::authenticator_delegate::InstalledFlowDelegate;
+use google_calendar3::yup_oauth2::client::CustomHyperClientBuilder;
+use google_calendar3::yup_oauth2::{
+    InstalledFlowAuthenticator, InstalledFlowReturnMethod, read_application_secret,
+};
+use google_calendar3::{hyper_rustls, hyper_util};
+
+pub const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.app.created";
+pub const ACTIVITY_SCOPE: &str =
+    "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
+pub const METRICS_SCOPE: &str =
+    "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
+pub const ALL_SCOPES: [&str; 3] = [CALENDAR_SCOPE, ACTIVITY_SCOPE, METRICS_SCOPE];
+
+pub type Connector =
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+pub type Auth = Authenticator<Connector>;
+
+/// HTTPS connector shared by the authenticator and the Calendar hub.
+pub(crate) fn connector() -> Result<Connector> {
+    Ok(hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .context("loading native TLS roots")?
+        .https_only()
+        .enable_http2()
+        .build())
+}
+
+/// Prints the consent URL and opens it in the default browser.
+struct BrowserDelegate;
+
+impl InstalledFlowDelegate for BrowserDelegate {
+    fn present_user_url<'a>(
+        &'a self,
+        url: &'a str,
+        _need_code: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+        Box::pin(async move {
+            println!("Opening Google consent page in your browser:\n{url}");
+            if let Err(e) = open::that(url) {
+                println!("Could not open a browser ({e}); open the URL above manually.");
+            }
+            Ok(String::new())
+        })
+    }
+}
+
+/// Build an authenticator from a Google "Desktop app" client JSON, caching tokens at `tokens`.
+pub async fn authenticator(secret: &Path, tokens: &Path) -> Result<Auth> {
+    let app_secret = read_application_secret(secret)
+        .await
+        .with_context(|| format!("reading OAuth client {}", secret.display()))?;
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(connector()?);
+    InstalledFlowAuthenticator::with_client(
+        app_secret,
+        InstalledFlowReturnMethod::HTTPRedirect,
+        CustomHyperClientBuilder::from(client),
+    )
+    .persist_tokens_to_disk(tokens)
+    .flow_delegate(Box::new(BrowserDelegate))
+    .build()
+    .await
+    .context("building OAuth authenticator")
+}
+
+/// Run the consent flow for every scope up front so later calls reuse the cached token.
+pub async fn login(secret: &Path, tokens: &Path) -> Result<Auth> {
+    let auth = authenticator(secret, tokens).await?;
+    access_token(&auth, &ALL_SCOPES).await?;
+    Ok(auth)
+}
+
+/// Current access token for `scopes`, refreshing or prompting as needed.
+pub async fn access_token(auth: &Auth, scopes: &[&str]) -> Result<String> {
+    let token = auth.token(scopes).await.context("fetching access token")?;
+    token
+        .token()
+        .map(str::to_owned)
+        .context("Google returned no access token")
+}
+
+/// True when the token cache holds at least one token.
+pub fn is_logged_in(tokens: &Path) -> bool {
+    std::fs::read(tokens)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<serde_json::Value>>(&b).ok())
+        .is_some_and(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logged_in_needs_non_empty_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        assert!(!is_logged_in(&path));
+        std::fs::write(&path, "[]").unwrap();
+        assert!(!is_logged_in(&path));
+        std::fs::write(&path, r#"[{"scopes":["x"],"token":{}}]"#).unwrap();
+        assert!(is_logged_in(&path));
+    }
+}

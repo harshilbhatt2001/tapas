@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      # Public devenv binary cache, as in https://devenv.sh/integrations/github-actions/
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      # Optional own cache: set repo variable CACHIX_CACHE and secret CACHIX_AUTH_TOKEN.
+      - if: ${{ vars.CACHIX_CACHE != '' }}
+        uses: cachix/cachix-action@v16
+        with:
+          name: ${{ vars.CACHIX_CACHE }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Install devenv.sh
+        run: nix profile add nixpkgs#devenv
+      - name: fmt, clippy, cargo test
+        run: devenv test
+      - name: Build package
+        run: nix build .#default --print-build-logs
+      - name: Smoke test
+        run: nix run . -- --help

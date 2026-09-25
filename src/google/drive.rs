@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use google_drive3::api::{File, Revision};
 use google_drive3::{DriveHub, Error as ApiError, common, hyper_util, yup_oauth2};
@@ -94,7 +94,7 @@ fn api_err(err: ApiError, what: &str) -> anyhow::Error {
     if let ApiError::MissingToken(e) = &err
         && let Some(yup_oauth2::Error::UserError(hint)) = e.downcast_ref()
     {
-        return anyhow!("{hint}");
+        return auth::NeedsLogin(hint.clone()).into();
     }
     anyhow::Error::new(err).context(what.to_owned())
 }
@@ -234,7 +234,20 @@ impl Drive {
         RemoteMeta::try_from(file)
     }
 
-    /// Content revisions of `file_id`, oldest first; the last one is the head.
+    /// Delete `file_id` for good (appDataFolder files cannot be trashed).
+    pub async fn delete(&self, file_id: &str) -> Result<()> {
+        self.hub
+            .files()
+            .delete(file_id)
+            .add_scope(DRIVE_SCOPE)
+            .doit()
+            .await
+            .map_err(|e| api_err(e, "deleting Drive file"))?;
+        Ok(())
+    }
+
+    /// Content revisions of `file_id` in the order Drive lists them, oldest first in practice
+    /// (the API does not promise an order; `sync` sorts by `modified`).
     pub async fn revisions(&self, file_id: &str) -> Result<Vec<RemoteRevision>> {
         let mut revs = Vec::new();
         let mut page: Option<String> = None;
@@ -354,7 +367,9 @@ mod tests {
     fn refused_login_error_is_just_the_hint() {
         let hint = auth::login_hint(auth::Api::Calendar);
         let err = ApiError::MissingToken(Box::new(yup_oauth2::Error::UserError(hint.clone())));
-        assert_eq!(api_err(err, "listing").to_string(), hint);
+        let err = api_err(err, "listing");
+        assert_eq!(err.to_string(), hint);
+        assert!(err.downcast_ref::<auth::NeedsLogin>().is_some());
         assert!(hint.contains("tapas google login --only calendar"));
     }
 }

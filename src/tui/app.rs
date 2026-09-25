@@ -254,7 +254,7 @@ impl App {
     pub fn commit(&mut self) {
         self.store.normalize();
         self.clamp();
-        let saved = storage::save(&self.paths, &self.store)
+        let saved = storage::save(&self.paths, &mut self.store)
             .and_then(|()| storage::save_device(&self.paths, &self.device));
         match saved {
             Ok(()) => self.info("Saved"),

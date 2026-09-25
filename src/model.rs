@@ -1,6 +1,6 @@
 //! Persistent data: the session library, plans (named weeks), profile and settings.
 
-use chrono::{NaiveTime, TimeDelta, Timelike};
+use chrono::{DateTime, NaiveTime, TimeDelta, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -118,6 +118,9 @@ pub struct SessionType {
     /// Counts toward the weekly training hours.
     pub counted: bool,
     pub efforts: Vec<Effort>,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    #[serde(default)]
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -156,6 +159,9 @@ pub struct Item {
     pub dur: u32,
     #[serde(default)]
     pub notes: String,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    #[serde(default)]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Item {
@@ -179,6 +185,9 @@ pub struct Plan {
     pub id: String,
     pub name: String,
     pub days: [Vec<Item>; 7],
+    /// Last change of the plan itself (its name); items carry their own.
+    #[serde(default)]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Plan {
@@ -187,6 +196,7 @@ impl Plan {
             id: Uuid::new_v4().to_string(),
             name: name.into(),
             days: Default::default(),
+            updated_at: DateTime::UNIX_EPOCH,
         }
     }
     #[must_use]
@@ -240,6 +250,9 @@ pub struct Profile {
     pub weight: f64,
     #[serde(default)]
     pub base: Base,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    #[serde(default)]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Default for Profile {
@@ -247,6 +260,7 @@ impl Default for Profile {
         Profile {
             weight: 73.0,
             base: Base::default(),
+            updated_at: DateTime::UNIX_EPOCH,
         }
     }
 }
@@ -259,6 +273,9 @@ pub struct ExportSettings {
     /// Google Calendar id of the calendar this app created, once it exists.
     #[serde(default)]
     pub calendar_id: Option<String>,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    #[serde(default)]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Default for ExportSettings {
@@ -268,12 +285,13 @@ impl Default for ExportSettings {
             weeks: 1,
             calendar_name: "Training".into(),
             calendar_id: None,
+            updated_at: DateTime::UNIX_EPOCH,
         }
     }
 }
 
 /// Schema version of [`Store`] this binary reads and writes.
-pub const STORE_VERSION: u32 = 2;
+pub const STORE_VERSION: u32 = 3;
 
 /// The synced document. Per-machine state lives in [`Device`].
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

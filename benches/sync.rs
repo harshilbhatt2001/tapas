@@ -6,7 +6,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::json;
 use tapas::{
     google::health::{map_exercise_type, parse_weights, parse_workouts},
-    sync,
+    services,
 };
 
 mod common;
@@ -55,7 +55,7 @@ fn benches(c: &mut Criterion) {
     let workouts = common::workouts_year();
     c.bench_function("planned_vs_done", |b| {
         b.iter(|| {
-            sync::planned_vs_done(
+            services::planned_vs_done(
                 black_box(&lib),
                 black_box(&plan),
                 common::monday(),

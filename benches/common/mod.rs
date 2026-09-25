@@ -1,7 +1,7 @@
 //! Shared bench fixtures. Each bench binary uses a subset, so unused ones are expected.
 #![allow(dead_code)]
 
-use chrono::{Days, Local, NaiveDate, NaiveTime, TimeZone};
+use chrono::{DateTime, Days, Local, NaiveDate, NaiveTime, TimeZone};
 use tapas::{
     google::health::Workout,
     library::{default_library, starter_plan},
@@ -42,6 +42,7 @@ pub fn plan_with(lib: &Library, per_day: usize) -> Plan {
                 start: NaiveTime::from_hms_opt(min / 60, min % 60, 0).expect("valid time"),
                 dur: e.dur.max(30),
                 notes: String::new(),
+                updated_at: DateTime::UNIX_EPOCH,
             });
         }
     }

@@ -22,6 +22,12 @@ let
       established crate and use it. Less code to maintain beats clever code.
     - Read the real API of the exact crate version in ~/.cargo/registry/src/*/<crate>-<ver>/
       instead of guessing from memory.
+    - YAGNI. No backwards compatibility: there are no other users, so no migration chains, legacy
+      file handling or compat shims; change formats directly and fail loudly on a version mismatch.
+      No tests for code that can't realistically break (getters, path joins, serde round trips,
+      error text, thin wrappers); test logic that can regress.
+    - Code explains itself through precise, idiomatic Rust names. No comments narrating a fix,
+      a bug avoided or history; comment only what a name can't express.
     - Plans, roadmaps and decisions live in the Obsidian vault at ${vault}
       ("Tapas.md" hub, "Tapas Roadmap.md" checklist, "Tapas Decisions.md" ADR log). Use wikilinks.
   '';
@@ -37,9 +43,9 @@ in
 
     agents = {
       rust-architect = {
-        description = "Rust architect for tapas. Use before starting a feature or refactor: designs module boundaries, picks crates (preferring existing ones over hand-written code), and records the plan in the Obsidian roadmap and decision log.";
+        description = "Rust architect for tapas. Use before starting a feature or refactor: designs module boundaries, picks crates (preferring existing ones over hand-written code), and records the plan in the Obsidian roadmap and decision log. Asked to build a feature end to end, it orchestrates the explorer, implementer and tester agents.";
         model = "opus";
-        tools = [ "Read" "Grep" "Glob" "Bash" "WebSearch" "WebFetch" "Write" "Edit" "mcp__devenv" ];
+        tools = [ "Read" "Grep" "Glob" "Bash" "WebSearch" "WebFetch" "Write" "Edit" "Agent" "mcp__devenv" ];
         prompt = ''
           You are the architect. You design; you do not implement features.
           ${rules}
@@ -47,6 +53,14 @@ in
           why, risks) returned to the caller. Also update "Tapas Roadmap.md" (checkbox tasks per phase)
           and append dated entries to "Tapas Decisions.md". Only write inside the vault; never edit
           source files. Check crate freshness and compatibility with `cargo search` and `cargo tree -d`.
+
+          Orchestration: when asked to deliver a feature, not just design it, delegate the work with the
+          Agent tool: rust-explorer for crate and code lookups, rust-implementer for code changes,
+          rust-tester to write tests and run the gate. Split work along module boundaries and launch
+          independent pieces in parallel; give agents that edit files at the same time separate
+          worktrees, then merge them in order. Hand each agent the exact slice of the plan it owns. Check
+          each report against the plan and the test gate before starting the next phase, and report
+          failures as they are.
         '';
       };
 

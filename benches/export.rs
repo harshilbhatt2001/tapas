@@ -7,7 +7,7 @@ use tapas::{
     export::{self, ExportEvent, ExportOpts},
     google::calendar,
     model::{Library, Plan, Store},
-    sync,
+    services,
 };
 
 mod common;
@@ -32,7 +32,7 @@ fn store((library, plan): (Library, Plan)) -> Store {
 /// The starter store and its exported first week.
 fn starter_events() -> (Store, Vec<ExportEvent>) {
     let s = store(common::starter());
-    let evs = export::events(&s, s.plan(), &opts());
+    let evs = export::events(&s, s.plan_or_first(None), &opts());
     (s, evs)
 }
 
@@ -44,7 +44,13 @@ fn events(c: &mut Criterion) {
         ("huge", store(common::huge())),
     ] {
         g.bench_function(BenchmarkId::from_parameter(name), |b| {
-            b.iter(|| export::events(black_box(&s), black_box(s.plan()), black_box(&opts)));
+            b.iter(|| {
+                export::events(
+                    black_box(&s),
+                    black_box(s.plan_or_first(None)),
+                    black_box(&opts),
+                )
+            });
         });
     }
     g.finish();
@@ -55,7 +61,13 @@ fn to_ics(c: &mut Criterion) {
     let mut g = c.benchmark_group("to_ics");
     for weeks in [1, 52] {
         g.bench_with_input(BenchmarkId::from_parameter(weeks), &weeks, |b, &w| {
-            b.iter(|| export::to_ics(black_box(s.plan()), black_box(&evs), black_box(w)));
+            b.iter(|| {
+                export::to_ics(
+                    black_box(s.plan_or_first(None)),
+                    black_box(&evs),
+                    black_box(w),
+                )
+            });
         });
     }
     g.finish();
@@ -75,8 +87,8 @@ fn to_google_csv(c: &mut Criterion) {
 
 fn to_event(c: &mut Criterion) {
     let (s, evs) = starter_events();
-    let cal = sync::cal_events(&evs);
-    let plan_id = &s.plan().id;
+    let cal = services::cal_events(&evs);
+    let plan_id = &s.plan_or_first(None).id;
     let mut g = c.benchmark_group("to_event");
     g.throughput(Throughput::Elements(cal.len() as u64));
     g.bench_function(BenchmarkId::from_parameter("starter"), |b| {

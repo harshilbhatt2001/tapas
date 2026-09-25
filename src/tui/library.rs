@@ -1,6 +1,6 @@
 //! Screen 3: the editable session library.
 
-use chrono::NaiveTime;
+use chrono::{DateTime, NaiveTime};
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent},
@@ -126,6 +126,7 @@ fn blank_type() -> SessionType {
         start: NaiveTime::from_hms_opt(7, 0, 0).expect("valid time"),
         counted: true,
         efforts: vec![blank_effort()],
+        updated_at: DateTime::UNIX_EPOCH,
     }
 }
 

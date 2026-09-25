@@ -1,6 +1,6 @@
 //! Persistent data: the session library, plans (named weeks), profile and settings.
 
-use chrono::{NaiveTime, TimeDelta, Timelike};
+use chrono::{DateTime, NaiveTime, TimeDelta, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -100,7 +100,6 @@ pub struct Effort {
     /// Default duration in minutes.
     pub dur: u32,
     /// Heavy leg work: keep 48 h away from key run/bike sessions.
-    #[serde(default)]
     pub legs: bool,
 }
 
@@ -118,6 +117,8 @@ pub struct SessionType {
     /// Counts toward the weekly training hours.
     pub counted: bool,
     pub efforts: Vec<Effort>,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -154,8 +155,9 @@ pub struct Item {
     pub start: NaiveTime,
     /// Minutes; 0 means an all-day marker.
     pub dur: u32,
-    #[serde(default)]
     pub notes: String,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Item {
@@ -179,6 +181,8 @@ pub struct Plan {
     pub id: String,
     pub name: String,
     pub days: [Vec<Item>; 7],
+    /// Last change of the plan itself (its name); items carry their own.
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Plan {
@@ -187,6 +191,7 @@ impl Plan {
             id: Uuid::new_v4().to_string(),
             name: name.into(),
             days: Default::default(),
+            updated_at: DateTime::UNIX_EPOCH,
         }
     }
     #[must_use]
@@ -238,8 +243,9 @@ impl Default for Base {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Profile {
     pub weight: f64,
-    #[serde(default)]
     pub base: Base,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Default for Profile {
@@ -247,6 +253,7 @@ impl Default for Profile {
         Profile {
             weight: 73.0,
             base: Base::default(),
+            updated_at: DateTime::UNIX_EPOCH,
         }
     }
 }
@@ -257,8 +264,9 @@ pub struct ExportSettings {
     pub weeks: u32,
     pub calendar_name: String,
     /// Google Calendar id of the calendar this app created, once it exists.
-    #[serde(default)]
     pub calendar_id: Option<String>,
+    /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Default for ExportSettings {
@@ -268,41 +276,50 @@ impl Default for ExportSettings {
             weeks: 1,
             calendar_name: "Training".into(),
             calendar_id: None,
+            updated_at: DateTime::UNIX_EPOCH,
         }
     }
 }
 
+/// Schema version of [`Store`] this binary reads and writes.
+pub const STORE_VERSION: u32 = 3;
+
+/// The synced document. Per-machine state lives in [`Device`].
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Store {
     pub version: u32,
     pub profile: Profile,
     pub library: Library,
     pub plans: Vec<Plan>,
-    pub active: usize,
-    #[serde(default)]
     pub export: ExportSettings,
 }
 
 impl Default for Store {
     fn default() -> Self {
         Store {
-            version: 1,
+            version: STORE_VERSION,
             profile: Profile::default(),
             library: crate::library::default_library(),
             plans: vec![Plan::new("Week 1")],
-            active: 0,
             export: ExportSettings::default(),
         }
     }
 }
 
 impl Store {
+    /// Index of the plan with `id`, or of the first plan when there is none.
     #[must_use]
-    pub fn plan(&self) -> &Plan {
-        &self.plans[self.active.min(self.plans.len() - 1)]
+    pub fn plan_index(&self, id: Option<&str>) -> usize {
+        id.and_then(|id| self.plans.iter().position(|p| p.id == id))
+            .unwrap_or(0)
     }
-    pub fn plan_mut(&mut self) -> &mut Plan {
-        let i = self.active.min(self.plans.len() - 1);
+    /// The plan with `id`, or the first plan.
+    #[must_use]
+    pub fn plan_or_first(&self, id: Option<&str>) -> &Plan {
+        &self.plans[self.plan_index(id)]
+    }
+    pub fn plan_or_first_mut(&mut self, id: Option<&str>) -> &mut Plan {
+        let i = self.plan_index(id);
         &mut self.plans[i]
     }
     /// Repair invariants after loading or editing.
@@ -310,7 +327,6 @@ impl Store {
         if self.plans.is_empty() {
             self.plans.push(Plan::new("Week 1"));
         }
-        self.active = self.active.min(self.plans.len() - 1);
         self.export.weeks = self.export.weeks.clamp(1, 52);
     }
     #[must_use]
@@ -318,6 +334,23 @@ impl Store {
         self.plans
             .iter()
             .find(|p| p.name.eq_ignore_ascii_case(name) || p.id == name)
+    }
+}
+
+/// State of this machine only, kept next to the store and never synced.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Device {
+    pub device_id: Uuid,
+    /// Id of the plan the TUI and CLI work on; the first plan when unset or gone.
+    pub active_plan: Option<String>,
+}
+
+impl Default for Device {
+    fn default() -> Self {
+        Device {
+            device_id: Uuid::new_v4(),
+            active_plan: None,
+        }
     }
 }
 

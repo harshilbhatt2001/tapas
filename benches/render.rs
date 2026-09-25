@@ -9,7 +9,7 @@ use ratatui::{
     crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers},
 };
 use tapas::{
-    model::{Library, Plan, Store},
+    model::{Device, Library, Plan, Store},
     storage::Paths,
     tui::{App, draw},
 };
@@ -27,7 +27,7 @@ const SCREENS: [&str; 5] = ["week", "plans", "library", "profile", "export"];
 /// stray save could never touch the real store. The `TempDir` must outlive the app.
 fn app(store: Store) -> (TempDir, App) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut app = App::new(Paths::under(dir.path()), store);
+    let mut app = App::new(Paths::under(dir.path()), store, Device::default());
     app.first_monday = common::monday();
     app.day = 0;
     app.card = 0;

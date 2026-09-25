@@ -20,6 +20,10 @@ pub const METRICS_SCOPE: &str =
     "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
 pub const ALL_SCOPES: [&str; 3] = [CALENDAR_SCOPE, ACTIVITY_SCOPE, METRICS_SCOPE];
 
+/// Downloaded client JSONs still point at the legacy `/o/oauth2/auth` endpoint, which rejects
+/// newer scopes such as `googlehealth.*`; the v2 endpoint accepts every catalogued scope.
+const AUTH_URI: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+
 pub type Connector =
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 pub type Auth = Authenticator<Connector>;
@@ -55,9 +59,10 @@ impl InstalledFlowDelegate for BrowserDelegate {
 
 /// Build an authenticator from a Google "Desktop app" client JSON, caching tokens at `tokens`.
 pub async fn authenticator(secret: &Path, tokens: &Path) -> Result<Auth> {
-    let app_secret = read_application_secret(secret)
+    let mut app_secret = read_application_secret(secret)
         .await
         .with_context(|| format!("reading OAuth client {}", secret.display()))?;
+    app_secret.auth_uri = AUTH_URI.to_owned();
     let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .build(connector()?);
     InstalledFlowAuthenticator::with_client(

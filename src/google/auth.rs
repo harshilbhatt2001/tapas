@@ -100,6 +100,19 @@ impl InstalledFlowDelegate for NoPromptDelegate {
     }
 }
 
+/// A non-interactive token request that needs `tapas google login`; displays as [`login_hint`].
+/// Offline looks the same from here: yup-oauth2 drops the failed refresh's own error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeedsLogin(pub String);
+
+impl std::fmt::Display for NeedsLogin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NeedsLogin {}
+
 /// Why a non-interactive token request failed and how to fix it.
 #[must_use]
 pub fn login_hint(api: Api) -> String {
@@ -174,13 +187,27 @@ pub async fn access_token(auth: &Auth, scopes: &[&str]) -> Result<String> {
         .context("Google returned no access token")
 }
 
+fn cached_tokens(tokens: &Path) -> Vec<serde_json::Value> {
+    std::fs::read(tokens)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
 /// True when the token cache holds at least one token.
 #[must_use]
 pub fn is_logged_in(tokens: &Path) -> bool {
-    std::fs::read(tokens)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Vec<serde_json::Value>>(&b).ok())
-        .is_some_and(|v| !v.is_empty())
+    !cached_tokens(tokens).is_empty()
+}
+
+/// True when a cached token was granted `scope`, so asking for it needs no new consent.
+#[must_use]
+pub fn has_scope(tokens: &Path, scope: &str) -> bool {
+    cached_tokens(tokens).iter().any(|t| {
+        t["scopes"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|x| x.as_str() == Some(scope)))
+    })
 }
 
 #[cfg(test)]
@@ -196,5 +223,7 @@ mod tests {
         assert!(!is_logged_in(&path));
         std::fs::write(&path, r#"[{"scopes":["x"],"token":{}}]"#).unwrap();
         assert!(is_logged_in(&path));
+        assert!(has_scope(&path, "x"));
+        assert!(!has_scope(&path, DRIVE_SCOPE));
     }
 }

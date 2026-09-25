@@ -87,6 +87,12 @@ impl Paths {
     pub fn legacy_tokens_file(&self) -> PathBuf {
         self.config_dir.join("tokens.json")
     }
+
+    /// Drive sync bookkeeping (`state.json`, `base.json`, `conflict-*.json`); never synced.
+    #[must_use]
+    pub fn sync_dir(&self) -> PathBuf {
+        self.data_dir.join("sync")
+    }
 }
 
 /// Write to a temporary file next to `path`, then rename it over the old one, so readers and
@@ -194,6 +200,12 @@ fn previous(file: &Path) -> Result<Option<Store>> {
         .and_then(|(doc, _)| serde_json::from_value(doc).ok()))
 }
 
+/// Parse a store document of any known version into a [`Store`], without `normalize`.
+pub fn parse(bytes: &[u8]) -> Result<Store> {
+    let (doc, _) = migrate(serde_json::from_slice(bytes)?)?;
+    Ok(serde_json::from_value(doc)?)
+}
+
 /// The saved store, migrated to the current version, or `Store::default()` when there is none
 /// yet; and this machine's device state. A new or migrated device state is saved right away.
 pub fn load(paths: &Paths) -> Result<(Store, Device)> {
@@ -238,6 +250,13 @@ pub fn save(paths: &Paths, store: &mut Store) -> Result<()> {
     if let Some(prev) = previous(&paths.store_file)? {
         merge::stamp(&prev, store, Utc::now());
     }
+    write_atomic(&paths.store_file, &serde_json::to_vec_pretty(store)?)
+}
+
+/// Save a store as it is, without stamping: for sync results, whose stamps come from the
+/// merge. Like [`save`], refuses to overwrite a newer version.
+pub fn write_store(paths: &Paths, store: &Store) -> Result<()> {
+    previous(&paths.store_file)?;
     write_atomic(&paths.store_file, &serde_json::to_vec_pretty(store)?)
 }
 

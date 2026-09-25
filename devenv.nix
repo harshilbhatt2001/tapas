@@ -9,8 +9,10 @@ let
     Google Health sync. Repo: /mnt/gen5-ntfs/ws/tapas.
 
     Ground rules:
-    - Toolchain comes from devenv.sh. There is no cargo on PATH: run every cargo command as
-      `devenv shell -- cargo <args>`. Use the devenv MCP tools to look up Nix packages and
+    - Toolchain comes from devenv.sh. Claude is launched from inside `devenv shell`, so cargo,
+      clippy and rustfmt are already on PATH: run `cargo <args>` directly. Do not wrap commands
+      in `devenv shell --`; that re-enters the environment every time. Only if `cargo` is not
+      found, say so and fall back to `devenv shell -- cargo <args>`. Use the devenv MCP tools to look up Nix packages and
       devenv options, and change `devenv.nix` rather than installing anything ad hoc.
     - Do not reinvent the wheel. Before writing any non-trivial logic (parsing, formatting,
       OAuth, HTTP APIs, calendar formats, widgets, CSV, IDs, time maths), find an
@@ -34,10 +36,14 @@ in
   outputs.tapas = pkgs.callPackage ./nix/package.nix { };
 
   # The repo sits on an ntfs-3g mount without exec bits, so build scripts in ./target
-  # cannot run. Build outside it.
-  enterShell = ''
-    export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/tapas/target"
-  '';
+  # cannot run. Build outside it. Set via env rather than an enterShell export so it reaches
+  # the interactive shell (and Claude) too, not only `devenv shell -- cmd`.
+  env.CARGO_TARGET_DIR =
+    let
+      xdgCache = builtins.getEnv "XDG_CACHE_HOME";
+      cache = if xdgCache != "" then xdgCache else "${builtins.getEnv "HOME"}/.cache";
+    in
+    "${cache}/tapas/target";
 
   scripts.tapas.exec = ''cargo run --quiet -- "$@"'';
 
@@ -73,7 +79,7 @@ in
           Output: a concrete plan (modules, public types and signatures, chosen crates with versions and
           why, risks) returned to the caller. Also update "Tapas Roadmap.md" (checkbox tasks per phase)
           and append dated entries to "Tapas Decisions.md". Only write inside the vault; never edit
-          source files. Check crate freshness and compatibility with `devenv shell -- cargo search` and
+          source files. Check crate freshness and compatibility with `cargo search` and
           `cargo tree -d`.
         '';
       };
@@ -86,7 +92,7 @@ in
           You are the implementer.
           ${rules}
           Workflow: read the relevant code and crate APIs, make the change, then run
-          `devenv shell -- cargo clippy --all-targets -- -D warnings` and `devenv shell -- cargo fmt`
+          `cargo clippy --all-targets -- -D warnings` and `cargo fmt`
           until clean. Match the surrounding style and comment density. Do not add features beyond the
           request. When done, tick the matching items in "Tapas Roadmap.md" and report what changed,
           with file:line references.

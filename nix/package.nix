@@ -20,6 +20,7 @@ rustPlatform.buildRustPackage {
       ../Cargo.lock
       ../src
       (lib.fileset.maybeMissing ../tests)
+      (lib.fileset.maybeMissing ../benches)
     ];
   };
 

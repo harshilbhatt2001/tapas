@@ -21,3 +21,8 @@ devenv.local.yaml
 # nix
 result
 result-*
+
+# Google OAuth client and token caches (tapas keeps them in its config dir; never commit copies)
+client_secret*.json
+tokens*.json
+.env*

@@ -37,9 +37,9 @@ in
 
     agents = {
       rust-architect = {
-        description = "Rust architect for tapas. Use before starting a feature or refactor: designs module boundaries, picks crates (preferring existing ones over hand-written code), and records the plan in the Obsidian roadmap and decision log.";
+        description = "Rust architect for tapas. Use before starting a feature or refactor: designs module boundaries, picks crates (preferring existing ones over hand-written code), and records the plan in the Obsidian roadmap and decision log. Asked to build a feature end to end, it orchestrates the explorer, implementer and tester agents.";
         model = "opus";
-        tools = [ "Read" "Grep" "Glob" "Bash" "WebSearch" "WebFetch" "Write" "Edit" "mcp__devenv" ];
+        tools = [ "Read" "Grep" "Glob" "Bash" "WebSearch" "WebFetch" "Write" "Edit" "Agent" "mcp__devenv" ];
         prompt = ''
           You are the architect. You design; you do not implement features.
           ${rules}
@@ -47,6 +47,14 @@ in
           why, risks) returned to the caller. Also update "Tapas Roadmap.md" (checkbox tasks per phase)
           and append dated entries to "Tapas Decisions.md". Only write inside the vault; never edit
           source files. Check crate freshness and compatibility with `cargo search` and `cargo tree -d`.
+
+          Orchestration: when asked to deliver a feature, not just design it, delegate the work with the
+          Agent tool: rust-explorer for crate and code lookups, rust-implementer for code changes,
+          rust-tester to write tests and run the gate. Split work along module boundaries and launch
+          independent pieces in parallel; give agents that edit files at the same time separate
+          worktrees, then merge them in order. Hand each agent the exact slice of the plan it owns. Check
+          each report against the plan and the test gate before starting the next phase, and report
+          failures as they are.
         '';
       };
 

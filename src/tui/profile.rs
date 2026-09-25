@@ -16,7 +16,10 @@ use super::{
     export::google_state,
     widgets::{DIM, Field, Form, LINE},
 };
-use crate::{google::auth::Api, services};
+use crate::{
+    google::auth::Api,
+    services::{self, Prompt},
+};
 
 pub fn on_key(app: &mut App, k: KeyEvent) {
     match k.code {
@@ -42,7 +45,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             }
             let paths = app.paths.clone();
             app.spawn(Task::Weight, async move {
-                BgResult::Weight(services::latest_weight(&paths).await)
+                BgResult::Weight(services::latest_weight(&paths, Prompt::Never).await)
             });
         }
         _ => {}

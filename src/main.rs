@@ -9,9 +9,10 @@ use tapas::{
     calc,
     export::{self, ExportOpts},
     google::auth,
-    model::{DAYS, Device, Plan, Store, hm},
-    services,
+    model::{DAYS, Device, Plan, STORE_VERSION, Store, hm},
+    services::{self, Prompt},
     storage::{self, Paths},
+    sync::{self, Drift, Outcome, merge::Side},
 };
 
 /// Terminal training-week planner. Runs the TUI without a subcommand.
@@ -55,6 +56,30 @@ enum Command {
         #[command(subcommand)]
         command: HealthCommand,
     },
+    /// Sync the store with Google Drive: push, pull or merge.
+    #[command(args_conflicts_with_subcommands = true)]
+    Sync {
+        #[command(subcommand)]
+        command: Option<SyncCommand>,
+        /// Overwrite the other side with this one instead of merging; the overwritten copy is
+        /// saved to sync/conflict-*.json in the data dir.
+        #[arg(long, value_enum)]
+        keep: Option<Keep>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SyncCommand {
+    /// Local changes, last sync and Drive's copy, without writing anything.
+    Status,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Keep {
+    /// This machine's store.
+    Local,
+    /// Google Drive's store.
+    Remote,
 }
 
 #[derive(Subcommand)]
@@ -151,6 +176,13 @@ fn main() -> Result<()> {
         Some(Command::Health { command }) => {
             runtime()?.block_on(health(command, &paths, &mut store, &device))?;
         }
+        Some(Command::Sync { command, keep }) => {
+            let rt = runtime()?;
+            match command {
+                Some(SyncCommand::Status) => rt.block_on(sync_status(&paths, &store))?,
+                None => rt.block_on(sync_now(keep, &paths, &mut store, &device))?,
+            }
+        }
     }
     Ok(())
 }
@@ -206,7 +238,7 @@ async fn google(
                 weeks: weeks.unwrap_or(store.export.weeks),
                 include_life: store.export.include_life,
             };
-            let r = services::push_plan(paths, store, &plan, &opts).await?;
+            let r = services::push_plan(paths, store, &plan, &opts, Prompt::Browser).await?;
             store.export.calendar_id = Some(r.calendar_id);
             storage::save(paths, store)?;
             println!(
@@ -226,7 +258,7 @@ async fn health(
 ) -> Result<()> {
     match cmd {
         HealthCommand::Weight { apply } => {
-            let Some((kg, at)) = services::latest_weight(paths).await? else {
+            let Some((kg, at)) = services::latest_weight(paths, Prompt::Browser).await? else {
                 bail!("no weight in Google Health for the last 90 days");
             };
             let kg = (kg * 10.0).round() / 10.0;
@@ -242,7 +274,7 @@ async fn health(
         }
         HealthCommand::Week { start, all } => {
             let monday = services::week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
-            let workouts = services::week_workouts(paths, monday).await?;
+            let workouts = services::week_workouts(paths, monday, Prompt::Browser).await?;
             let plan = store.plan_or_first(device.active_plan.as_deref());
             let days = services::planned_vs_done(
                 &store.library,
@@ -276,6 +308,92 @@ async fn health(
                 println!("{hidden} commute rides not counted; --all lists them");
             }
         }
+    }
+    Ok(())
+}
+
+async fn sync_now(
+    keep: Option<Keep>,
+    paths: &Paths,
+    store: &mut Store,
+    device: &Device,
+) -> Result<()> {
+    let side = keep.map(|k| match k {
+        Keep::Local => Side::Local,
+        Keep::Remote => Side::Remote,
+    });
+    let r = services::sync_store(paths, store, device, side).await?;
+    for w in &r.warnings {
+        eprintln!("warning: {w}");
+    }
+    match &r.outcome {
+        Outcome::UpToDate => println!("Up to date with Google Drive"),
+        Outcome::Pushed => println!("Pushed local changes to Google Drive"),
+        Outcome::Pulled => println!("Pulled changes from Google Drive"),
+        Outcome::Created => println!(
+            "Uploaded this store to Google Drive; `tapas sync` on another machine fetches it"
+        ),
+        Outcome::Merged { conflicts } => {
+            println!("Merged this machine's and Google Drive's changes");
+            if !conflicts.is_empty() {
+                println!(
+                    "{} changed on both sides; the newer edit won:",
+                    conflicts.len()
+                );
+                for c in conflicts {
+                    println!("  {}", sync::describe(c, store));
+                }
+            }
+        }
+        Outcome::Kept(Side::Local) => println!("Replaced Google Drive's store with this one"),
+        Outcome::Kept(Side::Remote) => println!("Replaced this store with Google Drive's"),
+    }
+    for f in &r.conflict_files {
+        println!("Saved the overwritten copy to {}", f.display());
+    }
+    Ok(())
+}
+
+async fn sync_status(paths: &Paths, store: &Store) -> Result<()> {
+    let state = sync::read_state(paths)?;
+    let local = match &state {
+        None => "never synced".to_owned(),
+        Some(s) => {
+            let at = s.synced_at.with_timezone(&Local).format("%Y-%m-%d %H:%M");
+            let changes = if sync::is_dirty(paths, store)? {
+                "changes not on Drive yet"
+            } else {
+                "no changes since"
+            };
+            format!("last synced {at}, {changes}")
+        }
+    };
+    println!("Local: {local}");
+    match services::sync_status(paths).await {
+        Ok((drift, files)) => {
+            let drive = match drift {
+                Drift::Missing => "no store yet; `tapas sync` uploads this one",
+                Drift::Unchanged => "unchanged since the last sync",
+                Drift::Changed => "changed on another machine since the last sync",
+                Drift::Untracked => "holds a store this machine has not synced",
+            };
+            println!("Drive: {drive}");
+            if let Some(f) = files.first() {
+                let base = state.as_ref().map_or("none", |s| s.base_head.as_str());
+                println!("  head revision {}, last synced {base}", f.head_revision_id);
+                if let Some(v) = f.schema.filter(|v| *v > STORE_VERSION) {
+                    println!("  written by a newer tapas (store version {v}); update tapas here");
+                }
+            }
+            if files.len() > 1 {
+                println!(
+                    "  {} copies of {}; `tapas sync` merges them",
+                    files.len(),
+                    sync::FILE_NAME
+                );
+            }
+        }
+        Err(e) => println!("Drive: {e}"),
     }
     Ok(())
 }

@@ -1,6 +1,8 @@
 //! App state, event dispatch and background-task plumbing.
 
-use std::{collections::BTreeSet, future::Future, path::PathBuf, sync::mpsc::Sender};
+use std::{
+    collections::BTreeSet, future::Future, path::PathBuf, sync::mpsc::Sender, time::Instant,
+};
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -10,12 +12,14 @@ use ratatui::{
     widgets::ListState,
 };
 
-use super::{editor, export, library, plans, profile, week, widgets::Form};
+use super::{editor, export, library, plans, profile, sync, week, widgets::Form};
 use crate::{
     export as ex,
     google::{calendar::PushReport, health::Workout},
-    model::Store,
+    model::{Device, Plan, Store},
+    services::{self, SyncError},
     storage::{self, Paths},
+    sync::Report,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +99,8 @@ pub enum Task {
     Push,
     Weight,
     Workouts,
+    /// Drive store sync; shown in the header, not the status line.
+    Sync,
 }
 
 impl Task {
@@ -103,6 +109,7 @@ impl Task {
             Task::Push => "Pushing to Google Calendar",
             Task::Weight => "Fetching weight from Google Health",
             Task::Workouts => "Fetching workouts from Google Health",
+            Task::Sync => "Syncing with Google Drive",
         }
     }
 }
@@ -117,6 +124,13 @@ pub enum BgResult {
         monday: NaiveDate,
         res: Result<Vec<Workout>>,
     },
+    /// `sent` is the store the sync started from, `store` what it left on disk.
+    Synced {
+        manual: bool,
+        sent: Box<Store>,
+        store: Box<Store>,
+        res: Result<Report, SyncError>,
+    },
 }
 
 impl BgResult {
@@ -125,6 +139,7 @@ impl BgResult {
             BgResult::Pushed { .. } => Task::Push,
             BgResult::Weight(_) => Task::Weight,
             BgResult::Workouts { .. } => Task::Workouts,
+            BgResult::Synced { .. } => Task::Sync,
         }
     }
 }
@@ -148,6 +163,21 @@ pub struct Hit {
     pub card: Option<usize>,
 }
 
+/// Outcome of the last Drive sync; a running one shows as `Task::Sync` in `App::busy`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SyncStatus {
+    /// Not set up on this machine; says how to turn it on.
+    Off(String),
+    /// Set up; nothing finished yet.
+    Idle,
+    Synced(DateTime<Local>),
+    /// Merged with edits from another machine; this many collided and one side won.
+    Merged(usize),
+    Offline,
+    LoginNeeded,
+    Error,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LibFocus {
     #[default]
@@ -158,6 +188,7 @@ pub enum LibFocus {
 pub struct App {
     pub paths: Paths,
     pub store: Store,
+    pub device: Device,
     pub screen: Screen,
     pub modal: Modal,
     /// Selected day and card (index into the day sorted by start).
@@ -179,15 +210,24 @@ pub struct App {
     pub hits: Vec<Hit>,
     pub quit: bool,
     pub bg: Option<Background>,
+    pub sync: SyncStatus,
+    /// Edits saved here that are not on Drive yet, as far as this session knows.
+    pub unsynced: bool,
+    /// Push this long after the last edit.
+    pub push_at: Option<Instant>,
+    /// Try again after going offline.
+    pub retry_at: Option<Instant>,
 }
 
 impl App {
     #[must_use]
-    pub fn new(paths: Paths, store: Store) -> App {
-        let plan_sel = store.active;
+    pub fn new(paths: Paths, store: Store, device: Device) -> App {
+        let plan_sel = store.plan_index(device.active_plan.as_deref());
+        let sync = services::sync_off(&paths).map_or(SyncStatus::Idle, SyncStatus::Off);
         App {
             paths,
             store,
+            device,
             screen: Screen::Week,
             modal: Modal::None,
             day: 0,
@@ -209,7 +249,33 @@ impl App {
             hits: Vec::new(),
             quit: false,
             bg: None,
+            sync,
+            unsynced: false,
+            push_at: None,
+            retry_at: None,
         }
+    }
+
+    /// The active plan: this device's choice, or the first plan.
+    #[must_use]
+    pub fn plan(&self) -> &Plan {
+        self.store.plan_or_first(self.device.active_plan.as_deref())
+    }
+
+    pub fn plan_mut(&mut self) -> &mut Plan {
+        self.store
+            .plan_or_first_mut(self.device.active_plan.as_deref())
+    }
+
+    /// Index of the active plan in `store.plans`.
+    #[must_use]
+    pub fn active(&self) -> usize {
+        self.store.plan_index(self.device.active_plan.as_deref())
+    }
+
+    /// Make plan `i` active on this device; saved by the next [`App::commit`].
+    pub fn set_active(&mut self, i: usize) {
+        self.device.active_plan = self.store.plans.get(i).map(|p| p.id.clone());
     }
 
     pub fn info(&mut self, text: impl Into<String>) {
@@ -230,8 +296,13 @@ impl App {
     pub fn commit(&mut self) {
         self.store.normalize();
         self.clamp();
-        match storage::save(&self.paths, &self.store) {
-            Ok(()) => self.info("Saved"),
+        let saved = storage::save(&self.paths, &mut self.store)
+            .and_then(|()| storage::save_device(&self.paths, &self.device));
+        match saved {
+            Ok(()) => {
+                self.info("Saved");
+                sync::edited(self);
+            }
             Err(e) => self.error(format!("Save failed: {e:#}")),
         }
     }
@@ -239,7 +310,7 @@ impl App {
     /// Keep selections inside their lists.
     pub fn clamp(&mut self) {
         self.day = self.day.min(6);
-        let n = self.store.plan().days[self.day].len();
+        let n = self.plan().days[self.day].len();
         self.card = self.card.min(n.saturating_sub(1));
         self.plan_sel = self.plan_sel.min(self.store.plans.len() - 1);
         let types = &self.store.library.types;
@@ -284,7 +355,7 @@ impl App {
     #[must_use]
     pub fn busy_text(&self) -> Option<String> {
         const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
-        let first = self.busy.iter().next()?;
+        let first = self.busy.iter().find(|t| **t != Task::Sync)?;
         Some(format!("{} {}…", SPIN[self.tick % 4], first.label()))
     }
 
@@ -294,6 +365,12 @@ impl App {
             BgResult::Pushed { plan_id, res } => export::on_pushed(self, &plan_id, res),
             BgResult::Weight(res) => profile::on_weight(self, res),
             BgResult::Workouts { monday, res } => export::on_workouts(self, monday, res),
+            BgResult::Synced {
+                manual,
+                sent,
+                store,
+                res,
+            } => sync::on_synced(self, manual, &sent, &store, res),
         }
     }
 

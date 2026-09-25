@@ -1,6 +1,6 @@
 //! Screen 5: file export, Google Calendar push and Google Health workouts.
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate, Weekday};
@@ -15,13 +15,13 @@ use ratatui::{
 };
 
 use super::{
-    app::{App, BgResult, FormKind, Screen, Task},
+    app::{App, BgResult, FormKind, Screen, SyncStatus, Task},
     widgets::{DIM, Field, Form, LINE, OK, WARN},
 };
 use crate::{
     export::{self, ExportOpts},
     google::{auth::Api, calendar::PushReport, health::Workout},
-    sync,
+    services::{self, Prompt},
 };
 
 pub fn opts(app: &App) -> ExportOpts {
@@ -52,6 +52,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('c') => write(app, "csv"),
         KeyCode::Char('g') => push(app),
         KeyCode::Char('f') => fetch_workouts(app),
+        KeyCode::Char('s') => super::sync::start(app, true),
         _ => {}
     }
 }
@@ -99,7 +100,7 @@ fn file_name(plan: &str, ext: &str) -> String {
 
 fn write(app: &mut App, ext: &str) {
     let res = (|| -> Result<PathBuf> {
-        let plan = app.store.plan();
+        let plan = app.plan();
         let o = opts(app);
         let events = export::events(&app.store, plan, &o);
         anyhow::ensure!(!events.is_empty(), "nothing to export");
@@ -109,7 +110,7 @@ fn write(app: &mut App, ext: &str) {
             export::to_google_csv(&events, o.weeks)?
         };
         let path = out_dir().join(file_name(&plan.name, ext));
-        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
         Ok(path)
     })();
     match res {
@@ -122,14 +123,14 @@ fn write(app: &mut App, ext: &str) {
 }
 
 fn push(app: &mut App) {
-    if let Err(e) = sync::require_login(&app.paths, Api::Calendar) {
+    if let Err(e) = services::require_login(&app.paths, Api::Calendar) {
         app.error(format!("{e:#}"));
         return;
     }
     let (paths, store, o) = (app.paths.clone(), app.store.clone(), opts(app));
-    let plan = store.plan().clone();
+    let plan = app.plan().clone();
     app.spawn(Task::Push, async move {
-        let res = sync::push_plan(&paths, &store, &plan, &o).await;
+        let res = services::push_plan(&paths, &store, &plan, &o, Prompt::Never).await;
         BgResult::Pushed {
             plan_id: plan.id,
             res,
@@ -159,14 +160,14 @@ pub fn on_pushed(app: &mut App, plan_id: &str, res: Result<PushReport>) {
 }
 
 fn fetch_workouts(app: &mut App) {
-    if let Err(e) = sync::require_login(&app.paths, Api::Health) {
+    if let Err(e) = services::require_login(&app.paths, Api::Health) {
         app.error(format!("{e:#}"));
         return;
     }
-    let monday = sync::week_monday(Local::now().date_naive());
+    let monday = services::week_monday(Local::now().date_naive());
     let paths = app.paths.clone();
     app.spawn(Task::Workouts, async move {
-        let res = sync::week_workouts(&paths, monday).await;
+        let res = services::week_workouts(&paths, monday, Prompt::Never).await;
         BgResult::Workouts { monday, res }
     });
 }
@@ -175,7 +176,7 @@ pub fn on_workouts(app: &mut App, monday: NaiveDate, res: Result<Vec<Workout>>) 
     match res {
         Ok(w) => {
             let weight = app.store.profile.weight;
-            let commutes = w.iter().filter(|x| sync::is_commute(x, weight)).count();
+            let commutes = w.iter().filter(|x| services::is_commute(x, weight)).count();
             app.info(format!(
                 "{} workouts and {commutes} commute rides this week from Google Health; see the \
                  Done lines on screen 1 (c shows commutes)",
@@ -194,7 +195,7 @@ pub fn google_state(app: &App) -> Line<'static> {
         let mut spans = vec![Span::raw("Google: ")];
         let mut missing = Vec::new();
         for api in Api::ALL {
-            let ok = sync::is_logged_in(&app.paths, api);
+            let ok = services::is_logged_in(&app.paths, api);
             if !ok {
                 missing.push(api.name());
             }
@@ -247,10 +248,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Table::new(rows, [Constraint::Length(16), Constraint::Fill(1)]).block(
             Block::bordered()
-                .title(format!(" Export {} ", app.store.plan().name))
+                .title(format!(" Export {} ", app.plan().name))
                 .title_bottom(
                     Line::from(
-                        " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts ",
+                        " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts · s sync ",
                     )
                     .fg(DIM),
                 )
@@ -258,7 +259,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         ),
         table,
     );
-    let mut body = vec![google_state(app), Line::raw("")];
+    let mut sync = super::sync::status_line(app);
+    if let SyncStatus::Off(why) = &app.sync {
+        sync.spans.push(Span::raw(format!(" ({why})")));
+    }
+    let mut body = vec![google_state(app), sync, Line::raw("")];
     body.push(Line::raw(format!("Files go to {}.", out_dir().display())));
     if let Some(p) = &app.last_file {
         body.push(Line::from(vec![

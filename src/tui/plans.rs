@@ -22,10 +22,10 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('j') | KeyCode::Down => app.plan_sel = (app.plan_sel + 1).min(n - 1),
         KeyCode::Char('k') | KeyCode::Up => app.plan_sel = app.plan_sel.saturating_sub(1),
         KeyCode::Enter => {
-            app.store.active = app.plan_sel;
+            app.set_active(app.plan_sel);
             app.card = 0;
             app.commit();
-            app.info(format!("Active plan: {}", app.store.plan().name));
+            app.info(format!("Active plan: {}", app.plan().name));
         }
         KeyCode::Char('n') => {
             let name = format!("Week {}", n + 1);
@@ -65,8 +65,8 @@ fn name(form: &Form) -> Result<String, String> {
 /// A new empty plan, made active.
 pub fn apply_new(app: &mut App, form: &Form) -> Result<(), String> {
     app.store.plans.push(Plan::new(name(form)?));
-    app.store.active = app.store.plans.len() - 1;
-    app.plan_sel = app.store.active;
+    app.plan_sel = app.store.plans.len() - 1;
+    app.set_active(app.plan_sel);
     app.commit();
     Ok(())
 }
@@ -88,8 +88,8 @@ fn copy(app: &mut App) {
         it.id = Uuid::new_v4().to_string();
     }
     app.store.plans.push(p);
-    app.store.active = app.store.plans.len() - 1;
-    app.plan_sel = app.store.active;
+    app.plan_sel = app.store.plans.len() - 1;
+    app.set_active(app.plan_sel);
     app.commit();
 }
 
@@ -97,10 +97,15 @@ pub fn delete(app: &mut App, i: usize) {
     if app.store.plans.len() <= 1 || i >= app.store.plans.len() {
         return;
     }
-    app.store.plans.remove(i);
-    if app.store.active > i {
-        app.store.active -= 1;
+    if app.active() == i {
+        let next_or_prev = if i + 1 < app.store.plans.len() {
+            i + 1
+        } else {
+            i - 1
+        };
+        app.set_active(next_or_prev);
     }
+    app.store.plans.remove(i);
     app.commit();
 }
 
@@ -112,7 +117,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, p)| {
             let s = calc::summary(&app.store.library, p);
-            let active = i == app.store.active;
+            let active = i == app.active();
             let mark = if active { "● " } else { "  " };
             let n: usize = p.days.iter().map(Vec::len).sum();
             ListItem::new(Line::from(vec![

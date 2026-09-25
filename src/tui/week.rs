@@ -23,7 +23,7 @@ use crate::{
     calc::{self, Level},
     library,
     model::{DAYS, Item, TIME_FMT, hm},
-    sync::{self, DayDone},
+    services::{self, DayDone},
 };
 
 /// Below this width the board shows one day at a time.
@@ -31,8 +31,7 @@ pub const WIDE: u16 = 140;
 
 /// Items of the selected day in board order.
 fn sorted_ids(app: &App, day: usize) -> Vec<String> {
-    app.store
-        .plan()
+    app.plan()
         .sorted_day(day)
         .into_iter()
         .map(|x| x.id.clone())
@@ -45,7 +44,7 @@ pub fn selected_id(app: &App) -> Option<String> {
 
 /// Select item `id` wherever it is now.
 fn select(app: &mut App, id: &str) {
-    if let Some((d, _)) = app.store.plan().find(id) {
+    if let Some((d, _)) = app.plan().find(id) {
         app.day = d;
         app.card = sorted_ids(app, d).iter().position(|x| x == id).unwrap_or(0);
     }
@@ -90,11 +89,10 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('d') => {
             if let Some(id) = selected_id(app) {
                 let label = app
-                    .store
                     .plan()
                     .find(&id)
                     .map(|(d, i)| {
-                        let it = &app.store.plan().days[d][i];
+                        let it = &app.plan().days[d][i];
                         format!("{} on {}", title(app, it), DAYS[d])
                     })
                     .unwrap_or_default();
@@ -104,7 +102,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('<') => shift(app, -1),
         KeyCode::Char('>') => shift(app, 1),
         KeyCode::Char('S') => {
-            if app.store.plan().is_empty() {
+            if app.plan().is_empty() {
                 load_starter(app);
             } else {
                 app.confirm(
@@ -113,7 +111,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
                 );
             }
         }
-        KeyCode::Char('X') if !app.store.plan().is_empty() => {
+        KeyCode::Char('X') if !app.plan().is_empty() => {
             app.confirm("Clear every session from this week?", Action::ClearWeek);
         }
         _ => {}
@@ -127,42 +125,43 @@ pub fn add(app: &mut App, type_key: &str) {
         return;
     };
     let id = item.id.clone();
-    app.store.plan_mut().days[app.day].push(item);
+    let day = app.day;
+    app.plan_mut().days[day].push(item);
     app.commit();
     select(app, &id);
     editor::open(app, &id);
 }
 
 fn duplicate(app: &mut App) {
-    let Some((d, i)) = selected_id(app).and_then(|id| app.store.plan().find(&id)) else {
+    let Some((d, i)) = selected_id(app).and_then(|id| app.plan().find(&id)) else {
         return;
     };
     let copy = Item {
         id: Uuid::new_v4().to_string(),
-        ..app.store.plan().days[d][i].clone()
+        ..app.plan().days[d][i].clone()
     };
     let id = copy.id.clone();
-    app.store.plan_mut().days[d].push(copy);
+    app.plan_mut().days[d].push(copy);
     app.commit();
     select(app, &id);
 }
 
 pub fn delete(app: &mut App, id: &str) {
-    if let Some((d, i)) = app.store.plan().find(id) {
-        app.store.plan_mut().days[d].remove(i);
+    if let Some((d, i)) = app.plan().find(id) {
+        app.plan_mut().days[d].remove(i);
         app.commit();
     }
 }
 
 fn shift(app: &mut App, by: isize) {
     let Some(id) = selected_id(app) else { return };
-    let Some((d, i)) = app.store.plan().find(&id) else {
+    let Some((d, i)) = app.plan().find(&id) else {
         return;
     };
     let Some(to) = d.checked_add_signed(by).filter(|&t| t < 7) else {
         return;
     };
-    let plan = app.store.plan_mut();
+    let plan = app.plan_mut();
     let it = plan.days[d].remove(i);
     plan.days[to].push(it);
     app.commit();
@@ -170,13 +169,13 @@ fn shift(app: &mut App, by: isize) {
 }
 
 pub fn load_starter(app: &mut App) {
-    app.store.plan_mut().days = library::starter_days();
+    app.plan_mut().days = library::starter_days();
     app.card = 0;
     app.commit();
 }
 
 pub fn clear(app: &mut App) {
-    app.store.plan_mut().days = Default::default();
+    app.plan_mut().days = Default::default();
     app.card = 0;
     app.commit();
 }
@@ -305,13 +304,13 @@ fn done_lines(done: &DayDone, show_commutes: bool) -> Vec<Line<'static>> {
     let mut out = vec![Line::from(head)];
     if !done.done.is_empty() {
         out.push(Line::styled(
-            sync::workouts_text(&done.done),
+            services::workouts_text(&done.done),
             Style::new().fg(DIM),
         ));
     }
     if show_commutes && !done.commutes.is_empty() {
         out.push(Line::styled(
-            format!("commute: {}", sync::workouts_text(&done.commutes)),
+            format!("commute: {}", services::workouts_text(&done.commutes)),
             Style::new().fg(DIM).italic(),
         ));
     }
@@ -328,7 +327,7 @@ fn draw_day(
     wide: bool,
 ) {
     let lib = &app.store.library;
-    let c = calc::day_calc(lib, &app.store.profile, &app.store.plan().days[d]);
+    let c = calc::day_calc(lib, &app.store.profile, &app.plan().days[d]);
     let focused = d == app.day;
     let border_style = if focused {
         Style::new().fg(Color::White)
@@ -426,7 +425,7 @@ fn draw_cards(
     clashes: &HashSet<String>,
     focused: bool,
 ) {
-    let plan = app.store.plan();
+    let plan = app.plan();
     let items: Vec<Item> = plan.sorted_day(d).into_iter().cloned().collect();
     if items.is_empty() {
         f.render_widget(
@@ -491,7 +490,7 @@ fn draw_cards(
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
-    let plan = app.store.plan().clone();
+    let plan = app.plan().clone();
     let lib = &app.store.library;
     let checks = calc::checks(lib, &plan);
     let summary = calc::summary(lib, &plan);
@@ -503,7 +502,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let done = app.done.as_ref().map(|(monday, w)| {
         (
             *monday,
-            sync::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
+            services::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
         )
     });
     let done_day = |d: usize| done.as_ref().map(|(_, days)| days[d].clone());

@@ -1,6 +1,6 @@
 //! Glue between the core model and the Google clients, shared by the CLI and the TUI.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Days, NaiveDate, Utc, Weekday};
@@ -9,12 +9,14 @@ use crate::{
     calc,
     export::{self, ExportEvent, ExportOpts},
     google::{
-        auth::{self, Api, Auth},
+        auth::{self, Api, Auth, DRIVE_SCOPE},
         calendar::{self, CalEvent, PushReport},
+        drive::{Drive, RemoteMeta},
         health::{self, Workout},
     },
-    model::{Kind, Library, Plan, Store, hm},
+    model::{Device, Kind, Library, Plan, Store, hm},
     storage::Paths,
+    sync::{self, Drift, Report, merge::Side},
 };
 
 #[must_use]
@@ -133,17 +135,9 @@ pub fn planned_vs_done(
     out
 }
 
-/// Token cache of `api`. A pre-split `tokens.json` still works for Calendar, so it becomes
-/// the Calendar cache.
 #[must_use]
 pub fn tokens_file(paths: &Paths, api: Api) -> PathBuf {
-    let file = paths.tokens_file(api.name());
-    let legacy = paths.legacy_tokens_file();
-    if api == Api::Calendar && !file.exists() && legacy.exists() {
-        // Best effort: if the rename fails the user is asked to log in again.
-        let _ = std::fs::rename(&legacy, &file);
-    }
-    file
+    paths.tokens_file(api.name())
 }
 
 #[must_use]
@@ -166,9 +160,22 @@ pub fn require_login(paths: &Paths, api: Api) -> Result<()> {
     Ok(())
 }
 
-async fn authenticator(paths: &Paths, api: Api) -> Result<Auth> {
+/// What to do when a Google call needs a new consent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prompt {
+    /// Open the browser consent page (the CLI).
+    Browser,
+    /// Fail with the `tapas google login` hint (the TUI, background calls).
+    Never,
+}
+
+async fn authenticator(paths: &Paths, api: Api, prompt: Prompt) -> Result<Auth> {
     require_login(paths, api)?;
-    auth::authenticator(&paths.client_secret_file(), &tokens_file(paths, api)).await
+    let (secret, tokens) = (paths.client_secret_file(), tokens_file(paths, api));
+    match prompt {
+        Prompt::Browser => auth::authenticator(&secret, &tokens).await,
+        Prompt::Never => auth::background_authenticator(&secret, api, &tokens).await,
+    }
 }
 
 /// IANA name of the local time zone.
@@ -182,6 +189,7 @@ pub async fn push_plan(
     store: &Store,
     plan: &Plan,
     opts: &ExportOpts,
+    prompt: Prompt,
 ) -> Result<PushReport> {
     require_login(paths, Api::Calendar)?;
     let events = cal_events(&export::events(store, plan, opts));
@@ -189,7 +197,7 @@ pub async fn push_plan(
         bail!("nothing to push");
     }
     let tz = local_tz()?;
-    let auth = authenticator(paths, Api::Calendar).await?;
+    let auth = authenticator(paths, Api::Calendar, prompt).await?;
     calendar::push(
         &auth,
         &store.export.calendar_name,
@@ -203,17 +211,134 @@ pub async fn push_plan(
 }
 
 /// Latest weight in kg from Google Health over the last 90 days.
-pub async fn latest_weight(paths: &Paths) -> Result<Option<(f64, DateTime<Utc>)>> {
-    let auth = authenticator(paths, Api::Health).await?;
+pub async fn latest_weight(paths: &Paths, prompt: Prompt) -> Result<Option<(f64, DateTime<Utc>)>> {
+    let auth = authenticator(paths, Api::Health, prompt).await?;
     let token = auth::access_token(&auth, Api::Health.scopes()).await?;
     health::latest_weight_kg(&token, 90).await
 }
 
 /// Google Health workouts of the week starting `monday`.
-pub async fn week_workouts(paths: &Paths, monday: NaiveDate) -> Result<Vec<Workout>> {
-    let auth = authenticator(paths, Api::Health).await?;
+pub async fn week_workouts(
+    paths: &Paths,
+    monday: NaiveDate,
+    prompt: Prompt,
+) -> Result<Vec<Workout>> {
+    let auth = authenticator(paths, Api::Health, prompt).await?;
     let token = auth::access_token(&auth, Api::Health.scopes()).await?;
     health::workouts(&token, monday, monday + Days::new(6)).await
+}
+
+/// Why a Drive sync did not happen.
+#[derive(Debug)]
+pub enum SyncError {
+    /// Not set up on this machine; says how to turn it on. Never prompts or retries.
+    Off(String),
+    /// Google is unreachable.
+    Offline,
+    /// The saved login no longer works: the `tapas google login` hint.
+    LoginNeeded(String),
+    Failed(anyhow::Error),
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncError::Off(why) => write!(f, "sync is off: {why}"),
+            SyncError::Offline => f.write_str("offline: Google is unreachable"),
+            SyncError::LoginNeeded(hint) => f.write_str(hint),
+            SyncError::Failed(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for SyncError {}
+
+/// Why Drive sync is off here, `None` when it is set up: it needs the OAuth client and a
+/// Calendar login that was granted the Drive scope.
+#[must_use]
+pub fn sync_off(paths: &Paths) -> Option<String> {
+    let login = "run `tapas google login --only calendar`";
+    if !paths.client_secret_file().exists() {
+        return Some(
+            "no Google OAuth client; run `tapas google setup <client_secret.json>`".into(),
+        );
+    }
+    let tokens = tokens_file(paths, Api::Calendar);
+    if !auth::is_logged_in(&tokens) {
+        return Some(format!("not logged in to Google; {login}"));
+    }
+    if !auth::has_scope(&tokens, DRIVE_SCOPE) {
+        return Some(format!("the Google login has no Drive access; {login}"));
+    }
+    None
+}
+
+/// Host of the OAuth token endpoint, which every sync reaches first.
+const TOKEN_ENDPOINT: &str = "oauth2.googleapis.com:443";
+
+/// Whether Google accepts a TCP connection within 3 s.
+pub async fn online() -> bool {
+    let connect = tokio::net::TcpStream::connect(TOKEN_ENDPOINT);
+    matches!(
+        tokio::time::timeout(Duration::from_secs(3), connect).await,
+        Ok(Ok(_))
+    )
+}
+
+/// Sort a failed sync into offline, login needed or another error. yup-oauth2 turns a failed
+/// token refresh into a refused consent whether the token was revoked or the network is down,
+/// so only a probe of Google tells the two apart.
+async fn classify(err: anyhow::Error) -> SyncError {
+    if !online().await {
+        return SyncError::Offline;
+    }
+    match err.downcast::<auth::NeedsLogin>() {
+        Ok(hint) => SyncError::LoginNeeded(hint.0),
+        Err(e) => SyncError::Failed(e),
+    }
+}
+
+/// A Drive client on the Calendar login that never opens a browser.
+async fn drive(paths: &Paths) -> Result<Drive> {
+    let tokens = tokens_file(paths, Api::Calendar);
+    let secret = paths.client_secret_file();
+    Drive::new(auth::background_authenticator(&secret, Api::Calendar, &tokens).await?)
+}
+
+/// [`sync::sync`], or [`sync::keep`] with `keep`, against Google Drive.
+pub async fn sync_store(
+    paths: &Paths,
+    store: &mut Store,
+    device: &Device,
+    keep: Option<Side>,
+) -> Result<Report, SyncError> {
+    if let Some(why) = sync_off(paths) {
+        return Err(SyncError::Off(why));
+    }
+    let res = async {
+        let drive = drive(paths).await?;
+        match keep {
+            None => sync::sync(paths, &drive, store, device).await,
+            Some(side) => sync::keep(paths, &drive, store, device, side).await,
+        }
+    }
+    .await;
+    match res {
+        Ok(r) => Ok(r),
+        Err(e) => Err(classify(e).await),
+    }
+}
+
+/// [`sync::remote_status`] against Google Drive.
+pub async fn sync_status(paths: &Paths) -> Result<(Drift, Vec<RemoteMeta>), SyncError> {
+    if let Some(why) = sync_off(paths) {
+        return Err(SyncError::Off(why));
+    }
+    let res = async { sync::remote_status(paths, &drive(paths).await?).await }.await;
+    match res {
+        Ok(r) => Ok(r),
+        Err(e) => Err(classify(e).await),
+    }
 }
 
 #[cfg(test)]

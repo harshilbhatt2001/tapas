@@ -14,12 +14,15 @@ use google_calendar3::yup_oauth2::{
 use google_calendar3::{hyper_rustls, hyper_util};
 
 pub const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.app.created";
+/// Files tapas creates in the hidden Drive appDataFolder, used for store sync.
+pub const DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive.appdata";
 pub const ACTIVITY_SCOPE: &str =
     "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
 pub const METRICS_SCOPE: &str =
     "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
 /// A Google API with its own consent and token cache: the Health API rejects tokens that
-/// also carry another API's scopes (`DISALLOWED_OAUTH_SCOPES`).
+/// also carry another API's scopes (`DISALLOWED_OAUTH_SCOPES`). Drive rides on the Calendar
+/// consent and token cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Api {
     Calendar,
@@ -40,7 +43,7 @@ impl Api {
     #[must_use]
     pub fn scopes(self) -> &'static [&'static str] {
         match self {
-            Api::Calendar => &[CALENDAR_SCOPE],
+            Api::Calendar => &[CALENDAR_SCOPE, DRIVE_SCOPE],
             Api::Health => &[ACTIVITY_SCOPE, METRICS_SCOPE],
         }
     }
@@ -83,8 +86,73 @@ impl InstalledFlowDelegate for BrowserDelegate {
     }
 }
 
+/// Refuses the consent flow so background calls never prompt. In `Interactive` mode yup-oauth2
+/// aborts on this `Err`; `HTTPRedirect` would ignore it and wait for a redirect.
+struct NoPromptDelegate(Api);
+
+impl InstalledFlowDelegate for NoPromptDelegate {
+    fn present_user_url<'a>(
+        &'a self,
+        _url: &'a str,
+        _need_code: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+        Box::pin(async move { Err(login_hint(self.0)) })
+    }
+}
+
+/// A non-interactive token request that needs `tapas google login`; displays as [`login_hint`].
+/// Offline looks the same from here: yup-oauth2 drops the failed refresh's own error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeedsLogin(pub String);
+
+impl std::fmt::Display for NeedsLogin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NeedsLogin {}
+
+/// Why a non-interactive token request failed and how to fix it.
+#[must_use]
+pub fn login_hint(api: Api) -> String {
+    let name = api.name();
+    format!(
+        "Google {name} needs a new login (no saved token, a missing scope, or the refresh \
+         failed): run `tapas google login --only {name}`"
+    )
+}
+
 /// Build an authenticator from a Google "Desktop app" client JSON, caching tokens at `tokens`.
+/// A missing or insufficient token opens the browser consent flow.
 pub async fn authenticator(secret: &Path, tokens: &Path) -> Result<Auth> {
+    build(
+        secret,
+        tokens,
+        InstalledFlowReturnMethod::HTTPRedirect,
+        Box::new(BrowserDelegate),
+    )
+    .await
+}
+
+/// Like [`authenticator`], but never prompts: a saved refresh token refreshes silently, anything
+/// else fails with [`login_hint`]. For the TUI and background calls.
+pub async fn background_authenticator(secret: &Path, api: Api, tokens: &Path) -> Result<Auth> {
+    build(
+        secret,
+        tokens,
+        InstalledFlowReturnMethod::Interactive,
+        Box::new(NoPromptDelegate(api)),
+    )
+    .await
+}
+
+async fn build(
+    secret: &Path,
+    tokens: &Path,
+    method: InstalledFlowReturnMethod,
+    delegate: Box<dyn InstalledFlowDelegate>,
+) -> Result<Auth> {
     let mut app_secret = read_application_secret(secret)
         .await
         .with_context(|| format!("reading OAuth client {}", secret.display()))?;
@@ -93,11 +161,11 @@ pub async fn authenticator(secret: &Path, tokens: &Path) -> Result<Auth> {
         .build(connector()?);
     InstalledFlowAuthenticator::with_client(
         app_secret,
-        InstalledFlowReturnMethod::HTTPRedirect,
+        method,
         CustomHyperClientBuilder::from(client),
     )
     .persist_tokens_to_disk(tokens)
-    .flow_delegate(Box::new(BrowserDelegate))
+    .flow_delegate(delegate)
     .build()
     .await
     .context("building OAuth authenticator")
@@ -119,13 +187,27 @@ pub async fn access_token(auth: &Auth, scopes: &[&str]) -> Result<String> {
         .context("Google returned no access token")
 }
 
+fn cached_tokens(tokens: &Path) -> Vec<serde_json::Value> {
+    std::fs::read(tokens)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
 /// True when the token cache holds at least one token.
 #[must_use]
 pub fn is_logged_in(tokens: &Path) -> bool {
-    std::fs::read(tokens)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Vec<serde_json::Value>>(&b).ok())
-        .is_some_and(|v| !v.is_empty())
+    !cached_tokens(tokens).is_empty()
+}
+
+/// True when a cached token was granted `scope`, so asking for it needs no new consent.
+#[must_use]
+pub fn has_scope(tokens: &Path, scope: &str) -> bool {
+    cached_tokens(tokens).iter().any(|t| {
+        t["scopes"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|x| x.as_str() == Some(scope)))
+    })
 }
 
 #[cfg(test)]
@@ -141,5 +223,7 @@ mod tests {
         assert!(!is_logged_in(&path));
         std::fs::write(&path, r#"[{"scopes":["x"],"token":{}}]"#).unwrap();
         assert!(is_logged_in(&path));
+        assert!(has_scope(&path, "x"));
+        assert!(!has_scope(&path, DRIVE_SCOPE));
     }
 }

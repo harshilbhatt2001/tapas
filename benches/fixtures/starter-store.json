@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "profile": {
     "weight": 73.0,
     "base": {
@@ -7,7 +7,8 @@
       "P": 150.0,
       "C": 315.0,
       "F": 80.0
-    }
+    },
+    "updated_at": "1970-01-01T00:00:00Z"
   },
   "library": {
     "types": [
@@ -60,7 +61,8 @@
             "dur": 45,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "bike",
@@ -111,7 +113,8 @@
             "dur": 180,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "run",
@@ -162,7 +165,8 @@
             "dur": 75,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "gym",
@@ -205,7 +209,8 @@
             "dur": 25,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "brick",
@@ -232,7 +237,8 @@
             "dur": 120,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "padel",
@@ -267,7 +273,8 @@
             "dur": 60,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "work",
@@ -294,7 +301,8 @@
             "dur": 480,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "commute",
@@ -329,7 +337,8 @@
             "dur": 30,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       },
       {
         "key": "rest",
@@ -364,7 +373,8 @@
             "dur": 0,
             "legs": false
           }
-        ]
+        ],
+        "updated_at": "1970-01-01T00:00:00Z"
       }
     ]
   },
@@ -380,7 +390,8 @@
             "effort": "transit",
             "start": "07:30",
             "dur": 60,
-            "notes": "DH → AMS"
+            "notes": "DH → AMS",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "586bd3df-db43-4977-8e57-8a837a1d853c",
@@ -388,7 +399,8 @@
             "effort": "office",
             "start": "08:30",
             "dur": 510,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "0f96d6e1-2418-40a3-8f7c-e97b0d31653b",
@@ -396,7 +408,8 @@
             "effort": "transit",
             "start": "17:06",
             "dur": 90,
-            "notes": "AMS → home"
+            "notes": "AMS → home",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "0e32aae1-d2ba-4d68-a7eb-f0446911c789",
@@ -404,7 +417,8 @@
             "effort": "runwalk",
             "start": "19:00",
             "dur": 25,
-            "notes": "10 × 1 min run / 1 min walk"
+            "notes": "10 × 1 min run / 1 min walk",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ],
         [
@@ -414,7 +428,8 @@
             "effort": "heavy",
             "start": "07:00",
             "dur": 55,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "ccc586a2-2e1f-46ee-80be-60dc89122016",
@@ -422,7 +437,8 @@
             "effort": "home",
             "start": "09:00",
             "dur": 480,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "7809096b-562b-4104-99b3-21b4664069c7",
@@ -430,7 +446,8 @@
             "effort": "technique",
             "start": "18:30",
             "dur": 45,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ],
         [
@@ -440,7 +457,8 @@
             "effort": "runwalk",
             "start": "07:00",
             "dur": 25,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "9d36d8a1-a78a-49b1-8786-800cb5d642af",
@@ -448,7 +466,8 @@
             "effort": "home",
             "start": "09:00",
             "dur": 480,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "c538ea17-a22f-49cb-80ab-101892aedea9",
@@ -456,7 +475,8 @@
             "effort": "z2",
             "start": "17:30",
             "dur": 75,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ],
         [
@@ -466,7 +486,8 @@
             "effort": "transit",
             "start": "07:30",
             "dur": 60,
-            "notes": "DH → AMS"
+            "notes": "DH → AMS",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "f2ed1427-05fd-4d2c-a5b2-9e3eda8bafa4",
@@ -474,7 +495,8 @@
             "effort": "office",
             "start": "08:30",
             "dur": 570,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "c5db6593-8b02-4963-8216-6503278e7f9d",
@@ -482,7 +504,8 @@
             "effort": "transit",
             "start": "18:06",
             "dur": 90,
-            "notes": "AMS → home"
+            "notes": "AMS → home",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "04d1a533-d83b-4e47-8925-ec8afe13c0f7",
@@ -490,7 +513,8 @@
             "effort": "mobility",
             "start": "20:00",
             "dur": 20,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ],
         [
@@ -500,7 +524,8 @@
             "effort": "maint",
             "start": "07:00",
             "dur": 40,
-            "notes": "Upper body and core, no heavy legs before Saturday"
+            "notes": "Upper body and core, no heavy legs before Saturday",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "e8a1c933-5302-409c-8e6c-7c4731e63185",
@@ -508,7 +533,8 @@
             "effort": "home",
             "start": "09:00",
             "dur": 480,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "b9cb0d1b-a3a3-4b35-9172-6e329e97f6a0",
@@ -516,7 +542,8 @@
             "effort": "technique",
             "start": "18:00",
             "dur": 45,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ],
         [
@@ -526,7 +553,8 @@
             "effort": "long",
             "start": "09:00",
             "dur": 240,
-            "notes": "Ride block toward Nov 8"
+            "notes": "Ride block toward Nov 8",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ],
         [
@@ -536,7 +564,8 @@
             "effort": "runwalk",
             "start": "10:00",
             "dur": 25,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "55bb4703-3965-408d-b4d7-702c6cc29253",
@@ -544,7 +573,8 @@
             "effort": "social",
             "start": "11:30",
             "dur": 90,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "fcecff6d-4f92-4811-b6ea-7be86db34819",
@@ -552,7 +582,8 @@
             "effort": "technique",
             "start": "16:00",
             "dur": 45,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           },
           {
             "id": "0e622b36-24d2-4d63-aec2-bca07a2ac792",
@@ -560,17 +591,19 @@
             "effort": "tendon",
             "start": "17:00",
             "dur": 20,
-            "notes": ""
+            "notes": "",
+            "updated_at": "1970-01-01T00:00:00Z"
           }
         ]
-      ]
+      ],
+      "updated_at": "1970-01-01T00:00:00Z"
     }
   ],
-  "active": 0,
   "export": {
     "include_life": false,
     "weeks": 1,
     "calendar_name": "Training",
-    "calendar_id": null
+    "calendar_id": null,
+    "updated_at": "1970-01-01T00:00:00Z"
   }
 }

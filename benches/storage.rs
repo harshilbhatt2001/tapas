@@ -83,7 +83,8 @@ fn save(c: &mut Criterion) {
         for (id, dir) in dirs {
             let paths = Paths::under(&dir.path().join(name));
             group.bench_function(id, |b| {
-                b.iter(|| storage::save(black_box(&paths), black_box(&store)).expect("save"));
+                let mut store = store.clone();
+                b.iter(|| storage::save(black_box(&paths), black_box(&mut store)).expect("save"));
             });
         }
     }
@@ -95,7 +96,7 @@ fn load(c: &mut Criterion) {
     let mut group = io_group(c, "load");
     for (name, store) in stores() {
         let paths = Paths::under(&dir.path().join(name));
-        storage::save(&paths, &store).expect("save");
+        storage::save(&paths, &mut store.clone()).expect("save");
         group.throughput(bytes(&pretty(&store)));
         group.bench_function(name, |b| {
             b.iter(|| storage::load(black_box(&paths)).expect("load"));

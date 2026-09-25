@@ -16,7 +16,10 @@ use super::{
     export::google_state,
     widgets::{DIM, Field, Form, LINE},
 };
-use crate::{google::auth::Api, sync};
+use crate::{
+    google::auth::Api,
+    services::{self, Prompt},
+};
 
 pub fn on_key(app: &mut App, k: KeyEvent) {
     match k.code {
@@ -36,13 +39,13 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             app.open_form(form, FormKind::Profile);
         }
         KeyCode::Char('w') => {
-            if let Err(e) = sync::require_login(&app.paths, Api::Health) {
+            if let Err(e) = services::require_login(&app.paths, Api::Health) {
                 app.error(format!("{e:#}"));
                 return;
             }
             let paths = app.paths.clone();
             app.spawn(Task::Weight, async move {
-                BgResult::Weight(sync::latest_weight(&paths).await)
+                BgResult::Weight(services::latest_weight(&paths, Prompt::Never).await)
             });
         }
         _ => {}

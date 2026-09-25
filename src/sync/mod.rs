@@ -1107,6 +1107,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn several_rounds_of_alternating_edits_converge() {
+        let (fake, mut a, mut b) = pair().await;
+        for round in 0..3usize {
+            let (da, db) = (round * 2, round * 2 + 1);
+            a.edit(set_notes(da, 0, &format!("a{round}")));
+            a.sync(&fake).await.unwrap();
+            b.edit(set_notes(db, 0, &format!("b{round}")));
+            let r = b.sync(&fake).await.unwrap();
+            assert!(
+                matches!(r.outcome, Outcome::Merged { .. }),
+                "{:?}",
+                r.outcome
+            );
+            assert_eq!(a.sync(&fake).await.unwrap().outcome, Outcome::Pulled);
+        }
+        assert_eq!(a.store, b.store);
+        assert_eq!(a.on_disk(), b.store);
+        assert_eq!(b.on_disk(), b.store);
+        assert_eq!(fake.head(0), a.store);
+        for round in 0..3usize {
+            let (da, db) = (round * 2, round * 2 + 1);
+            assert_eq!(notes(&a.store, da, 0), format!("a{round}"));
+            assert_eq!(notes(&a.store, db, 0), format!("b{round}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn first_sync_with_no_local_store_pulls_drive() {
+        let fake = Fake::default();
+        let mut a = Machine::with_plans(1);
+        a.sync(&fake).await.unwrap();
+
+        let mut b = Machine::new(2);
+        assert!(!b.paths.store_file.exists());
+        let r = b.sync(&fake).await.unwrap();
+        assert_eq!(r.outcome, Outcome::Pulled);
+        assert_eq!(b.store, a.store);
+        assert_eq!(b.on_disk(), a.store);
+    }
+
+    #[tokio::test]
+    async fn first_sync_with_nothing_on_drive_creates_from_local() {
+        let fake = Fake::default();
+        let mut a = Machine::new(1);
+        let r = a.sync(&fake).await.unwrap();
+        assert_eq!(r.outcome, Outcome::Created);
+        assert_eq!(fake.head(0), a.store);
+    }
+
+    #[tokio::test]
     async fn remote_status_writes_nothing() {
         let fake = Fake::default();
         let mut a = Machine::with_plans(1);

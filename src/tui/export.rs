@@ -21,7 +21,7 @@ use super::{
 use crate::{
     export::{self, ExportOpts},
     google::{auth::Api, calendar::PushReport, health::Workout},
-    services,
+    services::{self, Prompt},
 };
 
 pub fn opts(app: &App) -> ExportOpts {
@@ -129,7 +129,7 @@ fn push(app: &mut App) {
     let (paths, store, o) = (app.paths.clone(), app.store.clone(), opts(app));
     let plan = app.plan().clone();
     app.spawn(Task::Push, async move {
-        let res = services::push_plan(&paths, &store, &plan, &o).await;
+        let res = services::push_plan(&paths, &store, &plan, &o, Prompt::Never).await;
         BgResult::Pushed {
             plan_id: plan.id,
             res,
@@ -166,7 +166,7 @@ fn fetch_workouts(app: &mut App) {
     let monday = services::week_monday(Local::now().date_naive());
     let paths = app.paths.clone();
     app.spawn(Task::Workouts, async move {
-        let res = services::week_workouts(&paths, monday).await;
+        let res = services::week_workouts(&paths, monday, Prompt::Never).await;
         BgResult::Workouts { monday, res }
     });
 }

@@ -15,15 +15,17 @@ use ratatui::{
 use uuid::Uuid;
 
 use super::{
-    app::{Action, App, Board, FormKind, Hit, Modal, Picker},
+    app::{Action, App, BgResult, Board, FormKind, Hit, Modal, Picker, Task},
     editor, plans,
     widgets::{DIM, Field, Form, LINE, OK, SURFACE, WARN, cells, frame_popup, hex, popup_area},
 };
 use crate::{
     calc::{self, Level},
+    google::auth::Api,
+    health_cache::{self, WeekActuals},
     library,
     model::{DAY_FMT, DAYS, Item, TIME_FMT, hm, week_monday, week_title},
-    services::{self, DayDone},
+    services::{self, DayDone, Prompt},
 };
 
 /// Below this width the board shows one day at a time.
@@ -59,6 +61,84 @@ fn step_week(app: &mut App, forward: bool) {
     };
     if let Some(m) = monday {
         app.set_board(Board::Week(m));
+    }
+}
+
+/// Fetch the week of `monday` from Google Health in the background when its cache is stale,
+/// Health is logged in and this session has not fetched it yet.
+pub fn auto_fetch_actuals(app: &mut App, monday: NaiveDate) {
+    let fetch = &app.actuals_fetch;
+    if fetch.started.contains(&monday) || fetch.running == Some(monday) {
+        return;
+    }
+    let cached = app
+        .actuals
+        .as_ref()
+        .filter(|(m, _)| *m == monday)
+        .map(|(_, a)| a);
+    if health_cache::needs_fetch(cached, monday, Local::now())
+        && services::is_logged_in(&app.paths, Api::Health)
+    {
+        request_actuals(app, monday);
+    }
+}
+
+/// Fetch the week of `monday` now, or after the running fetch in place of any week waiting.
+fn request_actuals(app: &mut App, monday: NaiveDate) {
+    let fetch = &mut app.actuals_fetch;
+    if fetch.running.is_none() {
+        start_actuals_fetch(app, monday);
+    } else if fetch.running != Some(monday) {
+        fetch.queued = Some(monday);
+    }
+}
+
+fn start_actuals_fetch(app: &mut App, monday: NaiveDate) {
+    let paths = app.paths.clone();
+    app.spawn(Task::Workouts, async move {
+        let res = services::fetch_week_actuals(&paths, monday, Prompt::Never).await;
+        BgResult::Workouts { monday, res }
+    });
+    if app.busy.contains(&Task::Workouts) {
+        app.actuals_fetch.running = Some(monday);
+        app.actuals_fetch.started.insert(monday);
+    }
+}
+
+/// `r`: fetch the dated week on the board again.
+fn refetch_actuals(app: &mut App) {
+    let Some(monday) = app.board_monday() else {
+        app.error("Templates have no Google Health data; t goes to this week");
+        return;
+    };
+    if let Err(e) = services::require_login(&app.paths, Api::Health) {
+        app.error(format!("{e:#}"));
+        return;
+    }
+    request_actuals(app, monday);
+}
+
+/// A finished fetch is already in the cache; show it when its week is on the board, then
+/// start the week waiting.
+pub fn on_actuals(app: &mut App, monday: NaiveDate, res: anyhow::Result<WeekActuals>) {
+    app.actuals_fetch.running = None;
+    match res {
+        Ok(actuals) if app.board_monday() == Some(monday) => {
+            let weight = app.store.profile.weight;
+            let w = &actuals.workouts;
+            let commutes = w.iter().filter(|x| services::is_commute(x, weight)).count();
+            app.info(format!(
+                "Google Health: {} workouts and {commutes} commute rides this week (c shows \
+                 commutes)",
+                w.len() - commutes
+            ));
+            app.actuals = Some((monday, actuals));
+        }
+        Ok(_) => {}
+        Err(e) => app.error(format!("Google Health, week of {monday}: {e:#}")),
+    }
+    if let Some(next) = app.actuals_fetch.queued.take() {
+        start_actuals_fetch(app, next);
     }
 }
 
@@ -173,6 +253,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('g') => open_go_to(app),
         KeyCode::Char('p') => open_template_picker(app),
+        KeyCode::Char('r') => refetch_actuals(app),
         KeyCode::Char('a') => {
             if app.store.library.types.is_empty() {
                 app.error("The library has no session types");
@@ -620,15 +701,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     draw_title(f, app, title);
 
     let clashes = calc::clashes(&plan);
-    let shown = app.board_monday();
     let done = app
-        .done
-        .as_ref()
-        .filter(|(m, _)| shown == Some(*m))
-        .map(|(monday, w)| {
+        .board_monday()
+        .zip(app.board_actuals())
+        .map(|(monday, a)| {
+            let weight = app.store.profile.weight;
             (
-                *monday,
-                services::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
+                a.fetched_at,
+                services::planned_vs_done(lib, &plan, monday, &a.workouts, weight),
             )
         });
     let done_day = |d: usize| done.as_ref().map(|(_, days)| days[d].clone());
@@ -648,7 +728,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(lower);
     let week_note = done.map_or_else(
         || " Checks ".into(),
-        |(m, _)| format!(" Checks · Done from Google Health, week of {m} "),
+        |(fetched_at, _)| {
+            let at = fetched_at.with_timezone(&Local).format("%a %-d %b %H:%M");
+            format!(" Checks · Done from Google Health, fetched {at} · r refetch ")
+        },
     );
     let lines: Vec<Line> = if checks.is_empty() {
         vec![Line::styled(

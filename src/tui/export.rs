@@ -1,9 +1,9 @@
-//! Screen 5: file export, Google Calendar push and Google Health workouts.
+//! Screen 5: file export, Google Calendar push and Google login state.
 
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, Local, NaiveDate, Weekday};
+use chrono::{Datelike, NaiveDate, Weekday};
 use directories::UserDirs;
 use ratatui::{
     Frame,
@@ -15,13 +15,12 @@ use ratatui::{
 };
 
 use super::{
-    app::{App, BgResult, FormKind, Screen, SyncStatus, Task},
+    app::{App, BgResult, FormKind, SyncStatus, Task},
     widgets::{DIM, Field, Form, LINE, OK, WARN},
 };
 use crate::{
     export::{self, ExportOpts},
-    google::{auth::Api, calendar::PushReport, health::Workout},
-    model::week_monday,
+    google::{auth::Api, calendar::PushReport},
     services::{self, Prompt},
 };
 
@@ -52,7 +51,6 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('i') => write(app, "ics"),
         KeyCode::Char('c') => write(app, "csv"),
         KeyCode::Char('g') => push(app),
-        KeyCode::Char('f') => fetch_workouts(app),
         KeyCode::Char('s') => super::sync::start(app, true),
         _ => {}
     }
@@ -159,36 +157,6 @@ pub fn on_pushed(app: &mut App, plan_id: &str, res: Result<PushReport>) {
     }
 }
 
-fn fetch_workouts(app: &mut App) {
-    if let Err(e) = services::require_login(&app.paths, Api::Health) {
-        app.error(format!("{e:#}"));
-        return;
-    }
-    let monday = week_monday(Local::now().date_naive());
-    let paths = app.paths.clone();
-    app.spawn(Task::Workouts, async move {
-        let res = services::week_workouts(&paths, monday, Prompt::Never).await;
-        BgResult::Workouts { monday, res }
-    });
-}
-
-pub fn on_workouts(app: &mut App, monday: NaiveDate, res: Result<Vec<Workout>>) {
-    match res {
-        Ok(w) => {
-            let weight = app.store.profile.weight;
-            let commutes = w.iter().filter(|x| services::is_commute(x, weight)).count();
-            app.info(format!(
-                "{} workouts and {commutes} commute rides this week from Google Health; see the \
-                 Done lines on screen 1 (c shows commutes)",
-                w.len() - commutes
-            ));
-            app.done = Some((monday, w));
-            app.screen = Screen::Week;
-        }
-        Err(e) => app.error(format!("Workouts: {e:#}")),
-    }
-}
-
 /// One line on whether Google is usable.
 pub fn google_state(app: &App) -> Line<'static> {
     if app.paths.client_secret_file().exists() {
@@ -251,7 +219,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .title(format!(" Export {} ", app.plan().name))
                 .title_bottom(
                     Line::from(
-                        " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts · s sync ",
+                        " e edit · i write .ics · c write CSV · g push to Google Calendar · s sync",
                     )
                     .fg(DIM),
                 )

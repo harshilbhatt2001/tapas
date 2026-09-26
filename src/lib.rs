@@ -1,5 +1,6 @@
 //! tapas: a terminal training-week planner.
 
+pub mod actuals;
 pub mod calc;
 pub mod export;
 pub mod google;

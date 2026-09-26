@@ -3,6 +3,8 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::google::health::Workout;
+
 /// Five heart-rate zones bounded by four upper limits.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HrZones {
@@ -149,10 +151,57 @@ pub fn met(kcal: f64, weight_kg: f64, minutes: u32) -> Option<f64> {
     (minutes > 0 && weight_kg > 0.0).then(|| kcal / weight_kg / (f64::from(minutes) / 60.0))
 }
 
+/// Time in `zones` from `samples` over the workout, else Google's bands, else `None`.
+#[must_use]
+pub fn workout_zones(workout: &Workout, samples: &[HrSample], zones: &HrZones) -> Option<ZoneTime> {
+    let own = time_in_zones(
+        samples,
+        workout.start.with_timezone(&Utc),
+        workout.end.with_timezone(&Utc),
+        zones,
+    );
+    if own.iter().any(|&secs| secs > 0) {
+        Some(ZoneTime::Own(own))
+    } else {
+        workout.google_zones.map(ZoneTime::Google)
+    }
+}
+
+/// How hard a recorded workout was.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Effort {
+    pub zones: Option<ZoneTime>,
+    pub trimp: Option<f64>,
+    pub met: Option<f64>,
+}
+
+#[must_use]
+pub fn workout_effort(
+    workout: &Workout,
+    samples: &[HrSample],
+    zones: &HrZones,
+    weight_kg: f64,
+) -> Effort {
+    let zones = workout_zones(workout, samples, zones);
+    Effort {
+        zones,
+        trimp: zones.map(|time| time.trimp()),
+        met: workout
+            .kcal
+            .and_then(|kcal| met(kcal, weight_kg, workout.minutes)),
+    }
+}
+
+/// Training load of a week: the sum of its workouts' TRIMP.
+#[must_use]
+pub fn week_trimp<'a>(efforts: impl IntoIterator<Item = &'a Effort>) -> f64 {
+    efforts.into_iter().filter_map(|effort| effort.trimp).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{Local, TimeZone};
 
     fn t0() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 9, 26, 7, 0, 0).unwrap()
@@ -264,5 +313,49 @@ mod tests {
         assert_eq!(met(700.0, 70.0, 60), Some(10.0));
         assert_eq!(met(700.0, 70.0, 0), None);
         assert_eq!(met(700.0, 0.0, 60), None);
+    }
+
+    fn workout(google_zones: Option<[u32; 4]>) -> Workout {
+        let start = t0().with_timezone(&Local);
+        Workout {
+            id: "run".into(),
+            exercise_type: "RUNNING".into(),
+            day: start.date_naive(),
+            start,
+            end: start + TimeDelta::seconds(4),
+            minutes: 0,
+            active_min: None,
+            kcal: None,
+            avg_hr: None,
+            distance_m: None,
+            elevation_m: None,
+            pace_s_per_km: None,
+            swim_lengths: None,
+            azm: None,
+            google_zones,
+            notes: None,
+            display_name: None,
+        }
+    }
+
+    #[test]
+    fn workout_zones_prefers_own_samples_over_google_bands() {
+        let zones = HrZones::default();
+        let samples = series(-2, &[180, 180, 100, 120, 140, 160, 180, 180]);
+        assert_eq!(
+            workout_zones(&workout(Some([60, 0, 0, 0])), &samples, &zones),
+            Some(ZoneTime::Own([1, 1, 1, 1, 0]))
+        );
+    }
+
+    #[test]
+    fn workout_zones_falls_back_to_google_bands_without_samples_inside() {
+        let zones = HrZones::default();
+        let before = series(-40, &[150, 150]);
+        assert_eq!(
+            workout_zones(&workout(Some([60, 30, 0, 0])), &before, &zones),
+            Some(ZoneTime::Google([60, 30, 0, 0]))
+        );
+        assert_eq!(workout_zones(&workout(None), &before, &zones), None);
     }
 }

@@ -18,6 +18,7 @@ use crate::{
     model::{Device, Kind, Library, Plan, Store, hm},
     storage::Paths,
     sync::{self, Drift, Report, merge::Side},
+    zones,
 };
 
 #[must_use]
@@ -77,9 +78,9 @@ pub fn is_commute(w: &Workout, weight_kg: f64) -> bool {
     if w.minutes < MIN_TRAINING_RIDE_MIN {
         return true;
     }
-    w.kcal.is_some_and(|kcal| {
-        kcal / weight_kg / (f64::from(w.minutes) / 60.0) < MIN_TRAINING_RIDE_MET
-    })
+    w.kcal
+        .and_then(|kcal| zones::met(kcal, weight_kg, w.minutes))
+        .is_some_and(|met| met < MIN_TRAINING_RIDE_MET)
 }
 
 /// Planned training and recorded workouts of one day.

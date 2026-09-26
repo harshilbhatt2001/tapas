@@ -4,6 +4,8 @@ use chrono::{DateTime, Days, NaiveDate, NaiveTime, TimeDelta, Timelike, Utc, Wee
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::zones::HrZones;
+
 pub const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /// chrono format of start times, in the store and on screen.
@@ -331,6 +333,7 @@ impl Default for Base {
 pub struct Profile {
     pub weight: f64,
     pub base: Base,
+    pub hr: HrZones,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
     pub updated_at: DateTime<Utc>,
 }
@@ -340,6 +343,7 @@ impl Default for Profile {
         Profile {
             weight: 73.0,
             base: Base::default(),
+            hr: HrZones::default(),
             updated_at: DateTime::UNIX_EPOCH,
         }
     }

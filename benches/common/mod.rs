@@ -42,6 +42,7 @@ pub fn plan_with(lib: &Library, per_day: usize) -> Plan {
                 start: NaiveTime::from_hms_opt(min / 60, min % 60, 0).expect("valid time"),
                 dur: e.dur.max(30),
                 notes: String::new(),
+                workout: None,
                 updated_at: DateTime::UNIX_EPOCH,
             });
         }

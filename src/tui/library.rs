@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     library::default_library,
-    model::{Category, Effort, Kind, SessionType, TIME_FMT},
+    model::{Category, DAY_FMT, Effort, Kind, SessionType, TIME_FMT},
 };
 
 pub fn on_key(app: &mut App, k: KeyEvent) {
@@ -82,13 +82,19 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             let Some(t) = app.store.library.types.get(app.lib_type) else {
                 return;
             };
-            let users: Vec<&str> = app
+            let templates = app
                 .store
                 .plans
                 .iter()
                 .filter(|p| p.uses_type(&t.key))
-                .map(|p| p.name.as_str())
-                .collect();
+                .map(|p| p.name.clone());
+            let weeks = app
+                .store
+                .weeks
+                .iter()
+                .filter(|w| w.plan.uses_type(&t.key))
+                .map(|w| format!("week of {}", w.monday.format(DAY_FMT)));
+            let users: Vec<String> = templates.chain(weeks).collect();
             if users.is_empty() {
                 let msg = format!("Delete type {:?}?", t.label);
                 app.confirm(msg, Action::DeleteType(app.lib_type));
@@ -286,12 +292,13 @@ pub fn apply_effort(app: &mut App, form: &Form, t: usize, e: Option<usize>) -> R
 }
 
 pub fn delete_type(app: &mut App, i: usize) {
-    let lib = &mut app.store.library;
-    let Some(t) = lib.types.get(i) else { return };
-    if app.store.plans.iter().any(|p| p.uses_type(&t.key)) {
+    let Some(t) = app.store.library.types.get(i) else {
+        return;
+    };
+    if app.store.every_plan().any(|p| p.uses_type(&t.key)) {
         return;
     }
-    lib.types.remove(i);
+    app.store.library.types.remove(i);
     app.commit();
 }
 

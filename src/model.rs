@@ -1,6 +1,6 @@
-//! Persistent data: the session library, plans (named weeks), profile and settings.
+//! Persistent data: the session library, plan templates, dated weeks, profile and settings.
 
-use chrono::{DateTime, NaiveTime, TimeDelta, Timelike, Utc};
+use chrono::{DateTime, Days, NaiveDate, NaiveTime, TimeDelta, Timelike, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -8,6 +8,9 @@ pub const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /// chrono format of start times, in the store and on screen.
 pub const TIME_FMT: &str = "%H:%M";
+
+/// chrono format of a date in messages: `Mon 21 Sep`.
+pub const DAY_FMT: &str = "%a %-d %b";
 
 /// Serde `with` module storing a `NaiveTime` as `"HH:MM"`.
 pub mod hhmm {
@@ -143,6 +146,15 @@ impl Library {
             .or_else(|| t.efforts.first())?;
         Some((t, e))
     }
+
+    /// `Swim: Technique`
+    #[must_use]
+    pub fn title(&self, it: &Item) -> String {
+        match self.resolve(it) {
+            Some((t, e)) => format!("{}: {}", t.label, e.label),
+            None => format!("{}: {}", it.type_key, it.effort),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -156,6 +168,8 @@ pub struct Item {
     /// Minutes; 0 means an all-day marker.
     pub dur: u32,
     pub notes: String,
+    /// Google Health workout id this item was done as, linked by hand.
+    pub workout: Option<String>,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
     pub updated_at: DateTime<Utc>,
 }
@@ -215,6 +229,79 @@ impl Plan {
     #[must_use]
     pub fn uses_type(&self, key: &str) -> bool {
         self.days.iter().flatten().any(|x| x.type_key == key)
+    }
+}
+
+/// Monday of the week containing `d`.
+#[must_use]
+pub fn week_monday(d: NaiveDate) -> NaiveDate {
+    d.week(Weekday::Mon).first_day()
+}
+
+/// `count` consecutive Mondays from the week containing `from`.
+pub fn mondays(from: NaiveDate, count: u32) -> impl Iterator<Item = NaiveDate> {
+    let first = week_monday(from);
+    (0..count).map(move |i| first + Days::new(7 * u64::from(i)))
+}
+
+/// A dated week: its own copy of a template's items, edited without touching the template.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Week {
+    pub monday: NaiveDate,
+    /// `id` is the Monday (`2026-09-21`); `name` is the template it was last applied from,
+    /// empty when the week was started by hand.
+    pub plan: Plan,
+}
+
+/// `Week of Mon 21 Sep 2026 · from "Build 2"`; `template` is the name it was applied from.
+#[must_use]
+pub fn week_title(monday: NaiveDate, template: &str) -> String {
+    let week = format!("Week of {}", monday.format("%a %-d %b %Y"));
+    if template.is_empty() {
+        week
+    } else {
+        format!("{week} · from \"{template}\"")
+    }
+}
+
+/// Namespace of the ids of items applied to the week of `monday`.
+fn week_namespace(monday: NaiveDate) -> Uuid {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("tapas-week:{monday}").as_bytes(),
+    )
+}
+
+impl Week {
+    #[must_use]
+    pub fn new(monday: NaiveDate) -> Week {
+        Week {
+            monday,
+            plan: Plan {
+                id: monday.to_string(),
+                name: String::new(),
+                days: Default::default(),
+                updated_at: DateTime::UNIX_EPOCH,
+            },
+        }
+    }
+
+    /// The week of `monday` holding `template`'s items. Item ids derive from the Monday and the
+    /// template item's id, so every machine applying the same template gets the same items.
+    #[must_use]
+    pub fn apply(template: &Plan, monday: NaiveDate) -> Week {
+        let ns = week_namespace(monday);
+        let mut week = Week::new(monday);
+        template.name.clone_into(&mut week.plan.name);
+        week.plan.days = template.days.clone().map(|day| {
+            day.into_iter()
+                .map(|it| Item {
+                    id: Uuid::new_v5(&ns, it.id.as_bytes()).to_string(),
+                    ..it
+                })
+                .collect()
+        });
+        week
     }
 }
 
@@ -282,7 +369,7 @@ impl Default for ExportSettings {
 }
 
 /// Schema version of [`Store`] this binary reads and writes.
-pub const STORE_VERSION: u32 = 3;
+pub const STORE_VERSION: u32 = 4;
 
 /// The synced document. Per-machine state lives in [`Device`].
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -290,7 +377,10 @@ pub struct Store {
     pub version: u32,
     pub profile: Profile,
     pub library: Library,
+    /// Undated templates; there is always at least one.
     pub plans: Vec<Plan>,
+    /// Sorted by `monday`.
+    pub weeks: Vec<Week>,
     pub export: ExportSettings,
 }
 
@@ -301,39 +391,73 @@ impl Default for Store {
             profile: Profile::default(),
             library: crate::library::default_library(),
             plans: vec![Plan::new("Week 1")],
+            weeks: Vec::new(),
             export: ExportSettings::default(),
         }
     }
 }
 
 impl Store {
-    /// Index of the plan with `id`, or of the first plan when there is none.
-    #[must_use]
-    pub fn plan_index(&self, id: Option<&str>) -> usize {
-        id.and_then(|id| self.plans.iter().position(|p| p.id == id))
-            .unwrap_or(0)
-    }
-    /// The plan with `id`, or the first plan.
-    #[must_use]
-    pub fn plan_or_first(&self, id: Option<&str>) -> &Plan {
-        &self.plans[self.plan_index(id)]
-    }
-    pub fn plan_or_first_mut(&mut self, id: Option<&str>) -> &mut Plan {
-        let i = self.plan_index(id);
-        &mut self.plans[i]
-    }
     /// Repair invariants after loading or editing.
     pub fn normalize(&mut self) {
         if self.plans.is_empty() {
             self.plans.push(Plan::new("Week 1"));
         }
+        self.weeks.sort_by_key(|w| w.monday);
         self.export.weeks = self.export.weeks.clamp(1, 52);
     }
+    /// The template named `name` (any case) or with id `name`.
     #[must_use]
     pub fn plan_by_name(&self, name: &str) -> Option<&Plan> {
         self.plans
             .iter()
             .find(|p| p.name.eq_ignore_ascii_case(name) || p.id == name)
+    }
+    /// Templates, then the plans of dated weeks.
+    pub fn every_plan(&self) -> impl Iterator<Item = &Plan> {
+        self.plans.iter().chain(self.weeks.iter().map(|w| &w.plan))
+    }
+    #[must_use]
+    pub fn week(&self, monday: NaiveDate) -> Option<&Week> {
+        let i = self
+            .weeks
+            .binary_search_by_key(&monday, |w| w.monday)
+            .ok()?;
+        Some(&self.weeks[i])
+    }
+    /// The stored week of `monday`, inserted empty in Monday order when there is none.
+    pub fn week_mut_or_insert(&mut self, monday: NaiveDate) -> &mut Week {
+        let i = match self.weeks.binary_search_by_key(&monday, |w| w.monday) {
+            Ok(i) => i,
+            Err(i) => {
+                self.weeks.insert(i, Week::new(monday));
+                i
+            }
+        };
+        &mut self.weeks[i]
+    }
+    /// Mondays of the `count` weeks from the week containing `from` whose stored week has
+    /// items.
+    #[must_use]
+    pub fn filled_weeks(&self, from: NaiveDate, count: u32) -> Vec<NaiveDate> {
+        mondays(from, count)
+            .filter(|&m| self.week(m).is_some_and(|w| !w.plan.is_empty()))
+            .collect()
+    }
+    /// Replace the items of the `count` weeks from the week containing `from` with copies of
+    /// template `template_id`'s. False when there is no such template.
+    #[must_use]
+    pub fn apply_template(&mut self, template_id: &str, from: NaiveDate, count: u32) -> bool {
+        let Some(template) = self.plans.iter().find(|p| p.id == template_id).cloned() else {
+            return false;
+        };
+        for monday in mondays(from, count) {
+            let applied = Week::apply(&template, monday).plan;
+            let week = self.week_mut_or_insert(monday);
+            week.plan.name = applied.name;
+            week.plan.days = applied.days;
+        }
+        true
     }
 }
 
@@ -341,15 +465,12 @@ impl Store {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Device {
     pub device_id: Uuid,
-    /// Id of the plan the TUI and CLI work on; the first plan when unset or gone.
-    pub active_plan: Option<String>,
 }
 
 impl Default for Device {
     fn default() -> Self {
         Device {
             device_id: Uuid::new_v4(),
-            active_plan: None,
         }
     }
 }
@@ -368,5 +489,73 @@ pub fn hm(min: f64) -> String {
         (0, r) => format!("{r}m"),
         (h, 0) => format!("{h}h"),
         (h, r) => format!("{h}h{r:02}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::starter_plan;
+
+    fn day(m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, m, d).unwrap()
+    }
+
+    fn item_ids(p: &Plan) -> Vec<&str> {
+        p.days.iter().flatten().map(|x| x.id.as_str()).collect()
+    }
+
+    #[test]
+    fn applying_a_template_gives_ids_fixed_by_the_monday() {
+        let t = starter_plan("Build 2");
+        let a = Week::apply(&t, day(9, 21));
+        assert_eq!(a, Week::apply(&t, day(9, 21)));
+        assert_eq!(a.plan.id, "2026-09-21");
+        assert_eq!(a.plan.name, "Build 2");
+        let next = Week::apply(&t, day(9, 28));
+        for ((x, y), z) in item_ids(&a.plan)
+            .into_iter()
+            .zip(item_ids(&next.plan))
+            .zip(item_ids(&t))
+        {
+            assert_ne!(x, y);
+            assert_ne!(x, z);
+        }
+        for d in 0..7 {
+            assert_eq!(a.plan.days[d].len(), t.days[d].len());
+            for (applied, template) in a.plan.days[d].iter().zip(&t.days[d]) {
+                let same_id = Item {
+                    id: template.id.clone(),
+                    ..applied.clone()
+                };
+                assert_eq!(&same_id, template);
+            }
+        }
+    }
+
+    #[test]
+    fn apply_template_fills_consecutive_weeks_and_replaces_their_items() {
+        let mut s = Store {
+            plans: vec![starter_plan("Base"), Plan::new("Taper")],
+            ..Store::default()
+        };
+        let (base, taper) = (s.plans[0].id.clone(), s.plans[1].id.clone());
+        s.week_mut_or_insert(day(10, 12)).plan.days[0] = s.plans[0].days[0].clone();
+        s.week_mut_or_insert(day(9, 14));
+        assert_eq!(s.filled_weeks(day(9, 30), 3), [day(10, 12)]);
+
+        // Any day snaps to its Monday.
+        assert!(s.apply_template(&base, day(9, 30), 3));
+        let mondays: Vec<_> = s.weeks.iter().map(|w| w.monday).collect();
+        assert_eq!(mondays, [day(9, 14), day(9, 28), day(10, 5), day(10, 12)]);
+        for m in &mondays[1..] {
+            assert_eq!(s.week(*m).unwrap(), &Week::apply(&s.plans[0], *m));
+        }
+
+        assert!(s.apply_template(&taper, day(10, 12), 1));
+        let w = s.week(day(10, 12)).unwrap();
+        assert!(w.plan.is_empty());
+        assert_eq!(w.plan.name, "Taper");
+        assert!(!s.apply_template("gone", day(10, 12), 1));
     }
 }

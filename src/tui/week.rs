@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use chrono::Local;
+use chrono::{Datelike, Days, Local, NaiveDate};
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent},
@@ -15,19 +15,118 @@ use ratatui::{
 use uuid::Uuid;
 
 use super::{
-    app::{Action, App, Hit, Modal},
-    editor,
-    widgets::{DIM, LINE, OK, SURFACE, WARN, cells, frame_popup, hex, popup_area},
+    app::{Action, App, Board, FormKind, Hit, Modal, Picker},
+    editor, plans,
+    widgets::{DIM, Field, Form, LINE, OK, SURFACE, WARN, cells, frame_popup, hex, popup_area},
 };
 use crate::{
     calc::{self, Level},
     library,
-    model::{DAYS, Item, TIME_FMT, hm},
+    model::{DAY_FMT, DAYS, Item, TIME_FMT, hm, week_monday, week_title},
     services::{self, DayDone},
 };
 
 /// Below this width the board shows one day at a time.
 pub const WIDE: u16 = 140;
+
+#[must_use]
+pub fn this_monday() -> NaiveDate {
+    week_monday(Local::now().date_naive())
+}
+
+/// `Week of Mon 21 Sep 2026 · from "Build 2"`, or `Template: Build 2`.
+#[must_use]
+pub fn board_title(app: &App) -> String {
+    let name = &app.plan().name;
+    match app.board_monday() {
+        Some(monday) => week_title(monday, name),
+        None => format!("Template: {name}"),
+    }
+}
+
+/// A dated week on the board with no stored `Week` yet.
+fn is_unstored_week(app: &App) -> bool {
+    app.board_monday()
+        .is_some_and(|m| app.store.week(m).is_none())
+}
+
+/// The board one week before or after the shown one; from a template, this week.
+fn step_week(app: &mut App, forward: bool) {
+    let monday = match app.board_monday() {
+        Some(m) if forward => m.checked_add_days(Days::new(7)),
+        Some(m) => m.checked_sub_days(Days::new(7)),
+        None => Some(this_monday()),
+    };
+    if let Some(m) = monday {
+        app.set_board(Board::Week(m));
+    }
+}
+
+fn open_go_to(app: &mut App) {
+    let shown = app
+        .board_monday()
+        .and_then(|m| m.checked_add_days(Days::new(app.day as u64)))
+        .unwrap_or_else(|| Local::now().date_naive());
+    let form = Form::new(
+        "Go to date",
+        Color::White,
+        vec![Field::text("Date YYYY-MM-DD", shown.to_string())],
+    );
+    app.open_form(form, FormKind::GoTo);
+}
+
+/// Show the week of the form's date with that day selected.
+pub fn go_to(app: &mut App, form: &Form) -> Result<(), String> {
+    let date: NaiveDate = form
+        .text(0)
+        .parse()
+        .map_err(|_| "Date: use YYYY-MM-DD".to_string())?;
+    app.set_board(Board::Week(week_monday(date)));
+    app.day = date.weekday().num_days_from_monday() as usize;
+    app.card = 0;
+    app.clamp();
+    Ok(())
+}
+
+fn open_template_picker(app: &mut App) {
+    if app.board_monday().is_none() {
+        app.error("Templates apply to dated weeks; t goes to this week");
+        return;
+    }
+    let name = &app.plan().name;
+    let selected = app
+        .store
+        .plans
+        .iter()
+        .position(|p| p.name == *name)
+        .unwrap_or(0);
+    app.modal = Modal::Picker(
+        Picker::Template,
+        ListState::default().with_selected(Some(selected)),
+    );
+}
+
+/// Apply template `i` to the week on the board, asking first when that replaces sessions.
+pub fn pick_template(app: &mut App, i: usize) {
+    let (Some(monday), Some(t)) = (app.board_monday(), app.store.plans.get(i)) else {
+        return;
+    };
+    let template = t.id.clone();
+    let n: usize = app.plan().days.iter().map(Vec::len).sum();
+    if n == 0 {
+        plans::apply_template(app, &template, monday, 1);
+    } else {
+        let msg = format!("Replace the {n} sessions of this week with \"{}\"?", t.name);
+        app.confirm(
+            msg,
+            Action::ApplyTemplate {
+                template,
+                from: monday,
+                weeks: 1,
+            },
+        );
+    }
+}
 
 /// Items of the selected day in board order.
 fn sorted_ids(app: &App, day: usize) -> Vec<String> {
@@ -65,11 +164,21 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             app.clamp();
         }
         KeyCode::Char('k') | KeyCode::Up => app.card = app.card.saturating_sub(1),
+        KeyCode::Char('[') => step_week(app, false),
+        KeyCode::Char(']') => step_week(app, true),
+        KeyCode::Char('t') => {
+            app.set_board(Board::Week(this_monday()));
+            app.day = today_index();
+            app.clamp();
+        }
+        KeyCode::Char('g') => open_go_to(app),
+        KeyCode::Char('p') => open_template_picker(app),
         KeyCode::Char('a') => {
             if app.store.library.types.is_empty() {
                 app.error("The library has no session types");
             } else {
-                app.modal = Modal::AddPicker(ListState::default().with_selected(Some(0)));
+                app.modal =
+                    Modal::Picker(Picker::AddType, ListState::default().with_selected(Some(0)));
             }
         }
         KeyCode::Enter | KeyCode::Char('e') => {
@@ -93,7 +202,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
                     .find(&id)
                     .map(|(d, i)| {
                         let it = &app.plan().days[d][i];
-                        format!("{} on {}", title(app, it), DAYS[d])
+                        format!("{} on {}", app.store.library.title(it), DAYS[d])
                     })
                     .unwrap_or_default();
                 app.confirm(format!("Delete {label}?"), Action::DeleteItem(id));
@@ -180,14 +289,6 @@ pub fn clear(app: &mut App) {
     app.commit();
 }
 
-/// `Swim: Technique`
-fn title(app: &App, it: &Item) -> String {
-    match app.store.library.resolve(it) {
-        Some((t, e)) => format!("{}: {}", t.label, e.label),
-        None => format!("{}: {}", it.type_key, it.effort),
-    }
-}
-
 /// Filled effort pips, ceil(rpe / 2) of 5.
 #[expect(
     clippy::cast_possible_truncation,
@@ -249,7 +350,10 @@ fn card<'a>(app: &App, it: &Item, clash: bool, selected: bool) -> Paragraph<'a> 
     } else {
         Style::new().fg(color).bold()
     };
-    let mut lines = vec![Line::from(top), Line::styled(title(app, it), title_style)];
+    let mut lines = vec![
+        Line::from(top),
+        Line::styled(app.store.library.title(it), title_style),
+    ];
     if !meta.is_empty() {
         lines.push(Line::styled(meta, Style::new().fg(DIM)));
     }
@@ -334,7 +438,19 @@ fn draw_day(
     } else {
         Style::new().fg(LINE)
     };
-    let mut head = vec![Span::raw(" "), Span::raw(DAYS[d]).bold(), Span::raw(" ")];
+    let date = app
+        .board_monday()
+        .and_then(|m| m.checked_add_days(Days::new(d as u64)));
+    let label = date.map_or_else(|| DAYS[d].to_owned(), |x| x.format("%a %-d").to_string());
+    let label = if date == Some(Local::now().date_naive()) {
+        Span::styled(
+            format!(" {label} "),
+            Style::new().fg(Color::Black).bg(Color::White).bold(),
+        )
+    } else {
+        Span::raw(label).bold()
+    };
+    let mut head = vec![Span::raw(" "), label, Span::raw(" ")];
     head.push(Span::styled(
         format!(" {} ", c.lvl.name()),
         level_style(c.lvl),
@@ -428,12 +544,12 @@ fn draw_cards(
     let plan = app.plan();
     let items: Vec<Item> = plan.sorted_day(d).into_iter().cloned().collect();
     if items.is_empty() {
-        f.render_widget(
-            Paragraph::new("Nothing planned. Press a to add.")
-                .fg(DIM)
-                .wrap(Wrap { trim: true }),
-            cards,
-        );
+        let msg = if is_unstored_week(app) {
+            "empty · p to apply a template"
+        } else {
+            "Nothing planned. Press a to add."
+        };
+        f.render_widget(Paragraph::new(msg).fg(DIM).wrap(Wrap { trim: true }), cards);
         return;
     }
     let sel = if focused { Some(app.card) } else { None };
@@ -495,16 +611,26 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let checks = calc::checks(lib, &plan);
     let summary = calc::summary(lib, &plan);
     let lower_h = (cells(checks.len().max(summary.disciplines.len()).max(1)) + 2).clamp(4, 10);
-    let [board, lower] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(lower_h)]).areas(area);
+    let [title, board, lower] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(lower_h),
+    ])
+    .areas(area);
+    draw_title(f, app, title);
 
     let clashes = calc::clashes(&plan);
-    let done = app.done.as_ref().map(|(monday, w)| {
-        (
-            *monday,
-            services::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
-        )
-    });
+    let shown = app.board_monday();
+    let done = app
+        .done
+        .as_ref()
+        .filter(|(m, _)| shown == Some(*m))
+        .map(|(monday, w)| {
+            (
+                *monday,
+                services::planned_vs_done(lib, &plan, *monday, w, app.store.profile.weight),
+            )
+        });
     let done_day = |d: usize| done.as_ref().map(|(_, days)| days[d].clone());
     app.hits.clear();
     let wide = area.width >= WIDE;
@@ -549,6 +675,22 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         checks_area,
     );
     draw_disciplines(f, &summary, disc_area);
+}
+
+/// The board's title and the keys that move it.
+fn draw_title(f: &mut Frame, app: &App, area: Rect) {
+    let keys = if app.board_monday().is_some() {
+        "[ ] week · t this week · g go to · p apply template "
+    } else {
+        "t this week · [ ] g dated weeks "
+    };
+    let [left, right] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(52)]).areas(area);
+    f.render_widget(
+        Paragraph::new(format!(" {}", board_title(app)).bold()),
+        left,
+    );
+    f.render_widget(Paragraph::new(keys).fg(DIM).right_aligned(), right);
 }
 
 /// Bars of planned time per discipline.
@@ -601,21 +743,45 @@ fn draw_disciplines(f: &mut Frame, summary: &calc::Summary, area: Rect) {
     }
 }
 
-/// The "add a session" type list.
-pub fn draw_picker(f: &mut Frame, app: &App, state: &mut ListState) {
-    let types = &app.store.library.types;
-    let area = popup_area(f.area(), 40, cells(types.len()) + 4);
-    let inner = frame_popup(f, area, &format!("Add to {}", DAYS[app.day]), Color::White);
-    let items: Vec<ListItem> = types
-        .iter()
-        .map(|t| {
-            ListItem::new(Line::from(vec![
-                Span::styled("● ", Style::new().fg(hex(&t.color))),
-                Span::raw(t.label.clone()),
-                Span::styled(format!("  {}", t.category.name()), Style::new().fg(DIM)),
-            ]))
-        })
-        .collect();
+/// The "add a session" type list, or the templates to apply to the week.
+pub fn draw_picker(f: &mut Frame, app: &App, picker: Picker, state: &mut ListState) {
+    let (title, items, confirm): (String, Vec<ListItem>, &str) = match picker {
+        Picker::AddType => (
+            format!("Add to {}", DAYS[app.day]),
+            app.store
+                .library
+                .types
+                .iter()
+                .map(|t| {
+                    ListItem::new(Line::from(vec![
+                        Span::styled("● ", Style::new().fg(hex(&t.color))),
+                        Span::raw(t.label.clone()),
+                        Span::styled(format!("  {}", t.category.name()), Style::new().fg(DIM)),
+                    ]))
+                })
+                .collect(),
+            "add",
+        ),
+        Picker::Template => (
+            app.board_monday().map_or_else(String::new, |m| {
+                format!("Apply to the week of {}", m.format(DAY_FMT))
+            }),
+            app.store
+                .plans
+                .iter()
+                .map(|p| {
+                    let hours = calc::summary(&app.store.library, p).hours;
+                    ListItem::new(Line::from(vec![
+                        Span::raw(p.name.clone()),
+                        Span::styled(format!("  {hours} h"), Style::new().fg(DIM)),
+                    ]))
+                })
+                .collect(),
+            "apply",
+        ),
+    };
+    let area = popup_area(f.area(), 44, cells(items.len()) + 4);
+    let inner = frame_popup(f, area, &title, Color::White);
     let [list, hint] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
     f.render_stateful_widget(
         List::new(items)
@@ -625,13 +791,12 @@ pub fn draw_picker(f: &mut Frame, app: &App, state: &mut ListState) {
         state,
     );
     f.render_widget(
-        Paragraph::new("j/k move · Enter add · Esc cancel").fg(DIM),
+        Paragraph::new(format!("j/k move · Enter {confirm} · Esc cancel")).fg(DIM),
         hint,
     );
 }
 
 /// Today's index in the week, for the initial selection.
 pub fn today_index() -> usize {
-    use chrono::Datelike;
     Local::now().weekday().num_days_from_monday() as usize
 }

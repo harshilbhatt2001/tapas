@@ -43,7 +43,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 tui-input = "0.15"
 tui-popup = "0.7"
-uuid = { version = "1", features = ["serde", "v4"] }
+uuid = { version = "1", features = ["serde", "v4", "v5"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

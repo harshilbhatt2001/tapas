@@ -115,15 +115,25 @@ pub enum Modal {
     },
     Picker(Picker, ListState),
     Form(Box<Form>, FormKind),
+    /// Every metric of the selected block's workouts, one group per workout.
+    WorkoutDetails {
+        title: String,
+        workouts: Vec<Vec<String>>,
+    },
 }
 
 /// What a list-picker modal picks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Picker {
     /// A library type to add to the selected day.
     AddType,
     /// A template to apply to the week on the board.
     Template,
+    /// The `Item.workout` to set on item `item`, one per choice.
+    Workout {
+        item: String,
+        links: Vec<Option<String>>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,8 +157,9 @@ impl Task {
 }
 
 pub enum BgResult {
+    /// `quiet` pushes report only failures.
     Pushed {
-        plan_id: String,
+        quiet: bool,
         res: Result<PushReport>,
     },
     Weight(Result<Option<(f64, DateTime<Utc>)>>),
@@ -235,7 +246,7 @@ pub struct App {
     board: Board,
     /// What the board shows for a week that is not stored yet.
     unstored_week: Plan,
-    /// Selected day and card (index into the day sorted by start).
+    /// Selected day and card (index into the day's visible board slots).
     pub day: usize,
     pub card: usize,
     pub plan_sel: usize,
@@ -247,7 +258,7 @@ pub struct App {
     /// The Google Health cache of the dated week last opened on the board.
     pub actuals: Option<(NaiveDate, WeekActuals)>,
     pub actuals_fetch: ActualsFetch,
-    /// Show commute rides next to the Done line (off by default; `c` on the week screen).
+    /// Show commute rides on the board (off by default; `c` on the week screen).
     pub show_commutes: bool,
     pub status: Status,
     pub busy: BTreeSet<Task>,
@@ -403,7 +414,7 @@ impl App {
             self.unstored_week = Week::new(monday).plan;
         }
         self.day = self.day.min(6);
-        let n = self.plan().days[self.day].len();
+        let n = week::day_slots(self, self.day).len();
         self.card = self.card.min(n.saturating_sub(1));
         self.plan_sel = self.plan_sel.min(self.store.plans.len() - 1);
         let types = &self.store.library.types;
@@ -455,7 +466,7 @@ impl App {
     pub fn on_bg(&mut self, res: BgResult) {
         self.busy.remove(&res.task());
         match res {
-            BgResult::Pushed { plan_id, res } => export::on_pushed(self, &plan_id, res),
+            BgResult::Pushed { quiet, res } => export::on_pushed(self, quiet, res),
             BgResult::Weight(res) => profile::on_weight(self, res),
             BgResult::Workouts { monday, res } => week::on_actuals(self, monday, res),
             BgResult::Synced {
@@ -521,7 +532,7 @@ impl App {
 
     fn on_modal_key(&mut self, modal: Modal, k: KeyEvent, ev: &Event) {
         match modal {
-            Modal::None | Modal::Help => {}
+            Modal::None | Modal::Help | Modal::WorkoutDetails { .. } => {}
             Modal::Confirm { msg, action } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => self.run(action),
                 KeyCode::Char('n') | KeyCode::Esc => self.info("Cancelled"),
@@ -538,9 +549,10 @@ impl App {
                     self.modal = Modal::Picker(picker, state);
                 }
                 KeyCode::Enter => {
-                    let n = match picker {
+                    let n = match &picker {
                         Picker::AddType => self.store.library.types.len(),
                         Picker::Template => self.store.plans.len(),
+                        Picker::Workout { links, .. } => links.len(),
                     };
                     if let Some(i) = state.selected().filter(|_| n > 0) {
                         let i = i.min(n - 1);
@@ -550,6 +562,9 @@ impl App {
                                 week::add(self, &key);
                             }
                             Picker::Template => week::pick_template(self, i),
+                            Picker::Workout { item, mut links } => {
+                                week::link_workout(self, &item, links.swap_remove(i));
+                            }
                         }
                     }
                 }

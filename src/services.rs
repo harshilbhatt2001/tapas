@@ -3,63 +3,28 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Days, NaiveDate, Utc};
+use chrono::{DateTime, Days, Local, NaiveDate, Utc};
 
 use crate::{
-    calc,
-    export::{self, ExportEvent, ExportOpts},
+    export::{self, ExportEvent},
     google::{
         auth::{self, Api, Auth, DRIVE_SCOPE},
-        calendar::{self, CalEvent, PushReport},
+        calendar::{self, PushReport},
         drive::{Drive, RemoteMeta},
         health::{self, Workout},
     },
     health_cache::{self, WeekActuals},
-    model::{Device, Kind, Library, Plan, Store, hm},
+    model::{Device, Kind, Store, mondays, week_monday},
     storage::Paths,
     sync::{self, Drift, Report, merge::Side},
     zones,
 };
-
-#[must_use]
-pub fn cal_events(events: &[ExportEvent]) -> Vec<CalEvent> {
-    events
-        .iter()
-        .map(|e| CalEvent {
-            item_id: e.item_id.clone(),
-            summary: e.summary.clone(),
-            description: e.description.clone(),
-            date: e.date,
-            start: e.start,
-            end: e.end,
-        })
-        .collect()
-}
 
 /// The tapas kind of a Google workout, if it maps to one.
 #[must_use]
 pub fn workout_kind(w: &Workout) -> Option<Kind> {
     let key = health::map_exercise_type(&w.exercise_type)?;
     Kind::ALL.into_iter().find(|k| k.name() == key)
-}
-
-/// `run`, or the lower-cased Google type for unmapped workouts.
-#[must_use]
-pub fn workout_label(w: &Workout) -> String {
-    workout_kind(w).map_or_else(
-        || w.exercise_type.to_lowercase().replace('_', " "),
-        |k| k.name().to_owned(),
-    )
-}
-
-/// `bike 2h22, walking 21m`
-#[must_use]
-pub fn workouts_text(workouts: &[Workout]) -> String {
-    workouts
-        .iter()
-        .map(|w| format!("{} {}", workout_label(w), hm(w.minutes.into())))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Bike rides shorter than this are commutes, not training.
@@ -81,54 +46,6 @@ pub fn is_commute(w: &Workout, weight_kg: f64) -> bool {
     w.kcal
         .and_then(|kcal| zones::met(kcal, weight_kg, w.minutes))
         .is_some_and(|met| met < MIN_TRAINING_RIDE_MET)
-}
-
-/// Planned training and recorded workouts of one day.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DayDone {
-    pub planned: usize,
-    pub planned_min: u32,
-    /// Workouts that count as training.
-    pub done: Vec<Workout>,
-    /// Commute rides: kept for display but never counted (see [`is_commute`]).
-    pub commutes: Vec<Workout>,
-}
-
-impl DayDone {
-    #[must_use]
-    pub fn done_min(&self) -> u32 {
-        self.done.iter().map(|w| w.minutes).sum()
-    }
-}
-
-/// Training items of `plan` next to the workouts that started in the week from `monday`.
-/// `weight_kg` turns calories into effort for [`is_commute`].
-#[must_use]
-pub fn planned_vs_done(
-    lib: &Library,
-    plan: &Plan,
-    monday: NaiveDate,
-    workouts: &[Workout],
-    weight_kg: f64,
-) -> [DayDone; 7] {
-    let mut out: [DayDone; 7] = Default::default();
-    for (d, items) in plan.days.iter().enumerate() {
-        let train = items.iter().filter(|x| calc::is_train(lib, x));
-        out[d].planned = train.clone().count();
-        out[d].planned_min = train.map(|x| x.dur).sum();
-    }
-    for w in workouts {
-        let day = (w.day - monday).num_days();
-        if let Ok(d @ 0..7) = usize::try_from(day) {
-            let list = if is_commute(w, weight_kg) {
-                &mut out[d].commutes
-            } else {
-                &mut out[d].done
-            };
-            list.push(w.clone());
-        }
-    }
-    out
 }
 
 #[must_use]
@@ -179,28 +96,37 @@ pub fn local_tz() -> Result<String> {
     iana_time_zone::get_timezone().context("detecting the local time zone")
 }
 
-/// Replace `plan`'s events in the tapas Google calendar.
-pub async fn push_plan(
+/// Bring the `weeks` dated weeks from the week containing `from` up to date in the tapas Google
+/// calendar, past days with the cached Google Health actuals.
+pub async fn push_weeks(
     paths: &Paths,
     store: &Store,
-    plan: &Plan,
-    opts: &ExportOpts,
+    from: NaiveDate,
+    weeks: u32,
     prompt: Prompt,
 ) -> Result<PushReport> {
     require_login(paths, Api::Calendar)?;
-    let events = cal_events(&export::events(store, plan, opts));
-    if events.is_empty() {
-        bail!("nothing to push");
-    }
+    let today = Local::now().date_naive();
+    let events: Vec<(NaiveDate, Vec<ExportEvent>)> = mondays(from, weeks)
+        .map(|monday| {
+            let actuals = health_cache::load(paths, monday);
+            let events = export::week_events(
+                store,
+                monday,
+                actuals.as_ref(),
+                today,
+                store.export.include_life,
+            );
+            (monday, events)
+        })
+        .collect();
     let tz = local_tz()?;
     let auth = authenticator(paths, Api::Calendar, prompt).await?;
-    calendar::push(
+    calendar::push_weeks(
         &auth,
         &store.export.calendar_name,
         store.export.calendar_id.as_deref(),
-        &plan.id,
         &events,
-        opts.weeks,
         &tz,
     )
     .await
@@ -232,6 +158,28 @@ pub async fn fetch_week_actuals(
     };
     health_cache::save(paths, monday, &actuals)?;
     Ok(actuals)
+}
+
+/// This week and the `weeks - 1` before it, oldest first, fetched from Google Health unless
+/// the cache has them settled.
+pub async fn refresh_actuals(
+    paths: &Paths,
+    weeks: u32,
+    prompt: Prompt,
+) -> Result<Vec<(NaiveDate, WeekActuals)>> {
+    let now = Local::now();
+    let this_monday = week_monday(now.date_naive());
+    let first = this_monday - Days::new(7 * u64::from(weeks.saturating_sub(1)));
+    let mut out = Vec::new();
+    for monday in mondays(first, weeks) {
+        let cached = health_cache::load(paths, monday);
+        let actuals = match cached {
+            Some(a) if !health_cache::needs_fetch(Some(&a), monday, now) => a,
+            _ => fetch_week_actuals(paths, monday, prompt).await?,
+        };
+        out.push((monday, actuals));
+    }
+    Ok(out)
 }
 
 /// Why a Drive sync did not happen.
@@ -352,7 +300,6 @@ mod tests {
     use chrono::{Local, TimeZone};
 
     use super::*;
-    use crate::library::default_library;
 
     fn ride(ty: &str, day: u32, minutes: u32, kcal: Option<f64>) -> Workout {
         let start = Local.with_ymd_and_hms(2026, 9, day, 12, 0, 0).unwrap();
@@ -396,26 +343,5 @@ mod tests {
         // Only bikes: a short walk or run is never a commute ride.
         assert!(!is_commute(&ride("WALKING", 22, 21, Some(164.0)), kg));
         assert!(!is_commute(&ride("RUNNING", 22, 20, Some(150.0)), kg));
-    }
-
-    #[test]
-    fn commutes_are_kept_but_not_counted() {
-        let lib = default_library();
-        let plan = Plan::new("Week");
-        let monday = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
-        let workouts = [
-            ride("BIKING", 22, 142, Some(1270.0)),
-            ride("WALKING", 22, 21, Some(164.0)),
-            ride("BIKING", 23, 15, Some(95.0)),
-            ride("BIKING", 23, 14, Some(109.0)),
-        ];
-        let days = planned_vs_done(&lib, &plan, monday, &workouts, 71.1);
-        assert_eq!(days[1].done.len(), 2);
-        assert_eq!(days[1].done_min(), 163);
-        assert!(days[1].commutes.is_empty());
-        assert!(days[2].done.is_empty());
-        assert_eq!(days[2].done_min(), 0);
-        assert_eq!(days[2].commutes.len(), 2);
-        assert_eq!(workouts_text(&days[2].commutes), "bike 15m, bike 14m");
     }
 }

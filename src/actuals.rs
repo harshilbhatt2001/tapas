@@ -5,8 +5,9 @@ use chrono::{NaiveDate, NaiveTime, TimeDelta};
 use crate::{
     calc,
     google::health::Workout,
-    model::{Category, Item, Kind, Library, Plan, SessionType},
+    model::{Category, Item, Kind, Library, Plan, SessionType, hm},
     services::{is_commute, workout_kind},
+    zones::{Effort, ZoneTime},
 };
 
 /// `Item.workout` value of an item marked missed by hand.
@@ -257,6 +258,190 @@ pub fn totals(lib: &Library, week: &Plan, days: &[Vec<Slot>; 7]) -> Vec<TypeTota
                 .sum(),
         })
         .collect()
+}
+
+/// Google's display name, else the exercise type in sentence case: `Strength training`.
+#[must_use]
+pub fn workout_name(w: &Workout) -> String {
+    if let Some(name) = w.display_name.as_deref().filter(|n| !n.is_empty()) {
+        return name.to_owned();
+    }
+    let lower = w.exercise_type.to_lowercase().replace('_', " ");
+    let mut chars = lower.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+fn is_swim(w: &Workout) -> bool {
+    workout_kind(w) == Some(Kind::Swim)
+}
+
+fn minutes_of(seconds: u32) -> String {
+    hm((f64::from(seconds) / 60.0).round())
+}
+
+/// `Z2 48m Z3 12m`: the bands with at least half a minute, or all of them when `all_bands`.
+fn zones_text(zones: &ZoneTime, all_bands: bool) -> String {
+    zones
+        .labels()
+        .iter()
+        .zip(zones.seconds())
+        .filter(|&(_, &secs)| all_bands || secs >= 30)
+        .map(|(label, &secs)| format!("{label} {}", minutes_of(secs)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn dominant_label(zones: &ZoneTime) -> Option<&'static str> {
+    Some(zones.labels()[zones.dominant()?])
+}
+
+/// `32.1 km`, or `1500 m` for swims.
+fn distance_text(w: &Workout, metres: f64) -> String {
+    if is_swim(w) {
+        format!("{metres:.0} m")
+    } else {
+        format!("{:.1} km", metres / 1000.0)
+    }
+}
+
+/// `5:12 /km`, or per 100 m for swims: `1:55 /100 m`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "paces are a few minutes and non-negative"
+)]
+fn pace_text(w: &Workout, s_per_km: f64) -> String {
+    let (seconds, unit) = if is_swim(w) {
+        (s_per_km / 10.0, "/100 m")
+    } else {
+        (s_per_km, "/km")
+    };
+    let total = seconds.round() as u32;
+    format!("{}:{:02} {unit}", total / 60, total % 60)
+}
+
+/// `612 kcal · 142 bpm · Z2 48m Z3 12m · 32.1 km · load 85`, with only the known parts.
+#[must_use]
+pub fn metrics_text(w: &Workout, effort: &Effort) -> String {
+    let zones = effort.zones.and_then(|z| {
+        let text = zones_text(&z, false);
+        match (text.is_empty(), z.is_google()) {
+            (true, _) => None,
+            (false, true) => Some(format!("{text} (Google)")),
+            (false, false) => Some(text),
+        }
+    });
+    [
+        w.kcal.map(|kcal| format!("{kcal:.0} kcal")),
+        w.avg_hr.map(|bpm| format!("{bpm} bpm")),
+        zones,
+        w.distance_m.map(|m| distance_text(w, m)),
+        effort.trimp.map(|load| format!("load {load:.0}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+/// Every known metric of the workout, one per line.
+#[must_use]
+pub fn metrics_lines(w: &Workout, effort: &Effort) -> Vec<String> {
+    let zones = effort.zones.as_ref();
+    [
+        Some(workout_name(w)),
+        Some(format!(
+            "{}–{} · {}",
+            w.start.format("%H:%M"),
+            w.end.format("%H:%M"),
+            hm(w.minutes.into())
+        )),
+        w.active_min.map(|m| format!("Active {}", hm(m.into()))),
+        w.kcal.map(|kcal| format!("{kcal:.0} kcal")),
+        w.avg_hr.map(|bpm| format!("Avg HR {bpm} bpm")),
+        zones.map(|z| {
+            let bands = if z.is_google() {
+                "Google's bands"
+            } else {
+                "Zones"
+            };
+            format!("{bands}: {}", zones_text(z, true))
+        }),
+        zones
+            .and_then(dominant_label)
+            .map(|label| format!("Mostly {label}")),
+        effort.trimp.map(|load| format!("Load (TRIMP) {load:.0}")),
+        effort.met.map(|met| format!("MET {met:.1}")),
+        w.distance_m.map(|m| distance_text(w, m)),
+        w.elevation_m.map(|m| format!("Elevation {m:.0} m")),
+        w.pace_s_per_km
+            .map(|pace| format!("Pace {}", pace_text(w, pace))),
+        w.swim_lengths.map(|n| format!("{n} lengths")),
+        w.azm.map(|m| format!("Active zone minutes {m}")),
+        w.notes.clone().filter(|n| !n.is_empty()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The item's type and effort labels, or their keys when the library lacks them.
+fn type_and_effort_labels<'a>(lib: &'a Library, item: &'a Item) -> (&'a str, &'a str) {
+    lib.resolve(item)
+        .map_or((item.type_key.as_str(), item.effort.as_str()), |(t, e)| {
+            (t.label.as_str(), e.label.as_str())
+        })
+}
+
+/// `✓ Run 45m (plan Easy 40m)`, the minutes summed over a brick's workouts.
+#[must_use]
+pub fn done_title(lib: &Library, item: &Item, workouts: &[&Workout]) -> String {
+    let (type_label, effort_label) = type_and_effort_labels(lib, item);
+    let done_min: u32 = workouts.iter().map(|w| w.minutes).sum();
+    format!(
+        "✓ {type_label} {} (plan {effort_label} {})",
+        hm(done_min.into()),
+        hm(item.dur.into())
+    )
+}
+
+/// `✗ Run: Easy`
+#[must_use]
+pub fn missed_title(lib: &Library, item: &Item) -> String {
+    format!("✗ {}", lib.title(item))
+}
+
+/// `✓ Walking 30m`
+#[must_use]
+pub fn extra_title(w: &Workout) -> String {
+    format!("✓ {} {}", workout_name(w), hm(w.minutes.into()))
+}
+
+/// `plan 7.0 MET · did Z2, 7.6 MET`; `None` when neither the dominant zone nor the MET is known.
+#[must_use]
+pub fn effort_comparison(lib: &Library, item: &Item, effort: &Effort) -> Option<String> {
+    let did: Vec<String> = [
+        effort
+            .zones
+            .as_ref()
+            .and_then(dominant_label)
+            .map(str::to_owned),
+        effort.met.map(|met| format!("{met:.1} MET")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if did.is_empty() {
+        return None;
+    }
+    let did = format!("did {}", did.join(", "));
+    Some(match lib.resolve(item) {
+        Some((_, planned)) => format!("plan {:.1} MET · {did}", planned.met),
+        None => did,
+    })
 }
 
 #[cfg(test)]
@@ -621,5 +806,66 @@ mod tests {
         assert_eq!(of("bike"), (60, 0));
         assert_eq!(of("swim"), (0, 0));
         assert!(totals.iter().all(|t| t.type_key != "padel"));
+    }
+
+    fn ride_with_metrics() -> Workout {
+        Workout {
+            kcal: Some(612.4),
+            avg_hr: Some(142),
+            distance_m: Some(32_080.0),
+            ..workout("BIKING", 0, "07:00", 60)
+        }
+    }
+
+    #[test]
+    fn metrics_text_with_own_zones() {
+        let effort = Effort {
+            zones: Some(ZoneTime::Own([10, 48 * 60, 12 * 60, 0, 0])),
+            trimp: Some(84.6),
+            met: None,
+        };
+        assert_eq!(
+            metrics_text(&ride_with_metrics(), &effort),
+            "612 kcal · 142 bpm · Z2 48m Z3 12m · 32.1 km · load 85"
+        );
+    }
+
+    #[test]
+    fn metrics_text_with_google_bands() {
+        let w = Workout {
+            kcal: None,
+            ..ride_with_metrics()
+        };
+        let effort = Effort {
+            zones: Some(ZoneTime::Google([0, 30 * 60, 5 * 60, 0])),
+            trimp: None,
+            met: None,
+        };
+        assert_eq!(
+            metrics_text(&w, &effort),
+            "142 bpm · moderate 30m vigorous 5m (Google) · 32.1 km"
+        );
+    }
+
+    #[test]
+    fn done_title_sums_a_bricks_workouts() {
+        let lib = default_library();
+        let brick = item(&lib, "brick", "09:00", 120);
+        let ride = workout("BIKING", 0, "09:05", 95);
+        let run = workout("RUNNING", 0, "10:45", 35);
+        let (type_label, effort_label) = type_and_effort_labels(&lib, &brick);
+        assert_eq!(
+            done_title(&lib, &brick, &[&ride, &run]),
+            format!("✓ {type_label} 2h10 (plan {effort_label} 2h)")
+        );
+    }
+
+    #[test]
+    fn pace_is_per_km_or_per_100_m_for_swims() {
+        let run = workout("RUNNING", 0, "07:00", 40);
+        let swim = workout("SWIMMING_POOL", 0, "07:00", 40);
+        assert_eq!(pace_text(&run, 312.4), "5:12 /km");
+        assert_eq!(pace_text(&run, 359.6), "6:00 /km");
+        assert_eq!(pace_text(&swim, 1150.0), "1:55 /100 m");
     }
 }

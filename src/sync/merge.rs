@@ -1,18 +1,19 @@
 //! Three-way merge of the synced [`Store`], and the `updated_at` stamps it relies on. Pure: no IO.
 //!
-//! Entities are matched by id: plans by id, items by id within their plan (the day is one of
+//! Entities are matched by id: plans by id, dated weeks by their plan's id (the Monday), items
+//! by id within their plan (the day is one of
 //! the item's fields, so a move merges like an edit), session types by `key`, profile and
 //! export settings as single values. A change on one side wins. If both sides changed the same
 //! thing, the later `updated_at` wins; ties go to the higher device id. An edit beats a delete.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashMap};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::model::{
-    ExportSettings, Item, Library, Plan, Profile, STORE_VERSION, SessionType, Store,
+    ExportSettings, Item, Library, Plan, Profile, STORE_VERSION, SessionType, Store, Week,
 };
 
 /// Which side of a merge.
@@ -34,7 +35,7 @@ impl Side {
 /// What a conflict was about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entity {
-    /// A plan's own fields (its name), by plan id.
+    /// A plan's own fields (its name), by plan id; a dated week's id is its Monday.
     Plan(String),
     Item {
         plan: String,
@@ -121,15 +122,21 @@ pub fn stamp(prev: &Store, next: &mut Store, now: DateTime<Utc>) {
         restamp(prev.library.get(&t.key), t, now);
     }
     for p in &mut next.plans {
-        let old = prev.plans.iter().find(|q| q.id == p.id);
-        let mut h = head(p);
-        restamp(old.map(head).as_ref(), &mut h, now);
-        p.updated_at = h.updated_at;
-        for (d, day) in p.days.iter_mut().enumerate() {
-            for it in day {
-                let prev_same_day = old.and_then(|o| o.days[d].iter().find(|x| x.id == it.id));
-                restamp(prev_same_day, it, now);
-            }
+        stamp_plan(prev.plans.iter().find(|q| q.id == p.id), p, now);
+    }
+    for w in &mut next.weeks {
+        stamp_plan(prev.week(w.monday).map(|q| &q.plan), &mut w.plan, now);
+    }
+}
+
+fn stamp_plan(old: Option<&Plan>, p: &mut Plan, now: DateTime<Utc>) {
+    let mut h = head(p);
+    restamp(old.map(head).as_ref(), &mut h, now);
+    p.updated_at = h.updated_at;
+    for (d, day) in p.days.iter_mut().enumerate() {
+        for it in day {
+            let prev_same_day = old.and_then(|o| o.days[d].iter().find(|x| x.id == it.id));
+            restamp(prev_same_day, it, now);
         }
     }
 }
@@ -204,12 +211,20 @@ fn type_keys(l: &Library) -> Vec<&str> {
     l.types.iter().map(|t| t.key.as_str()).collect()
 }
 
-fn plan_ids(ps: &[Plan]) -> Vec<&str> {
+fn plan_ids<'a>(ps: &[&'a Plan]) -> Vec<&'a str> {
     ps.iter().map(|p| p.id.as_str()).collect()
 }
 
-fn find_plan<'a>(ps: &'a [Plan], id: &str) -> Option<&'a Plan> {
-    ps.iter().find(|p| p.id == id)
+fn find_plan<'a>(ps: &[&'a Plan], id: &str) -> Option<&'a Plan> {
+    ps.iter().find(|p| p.id == id).copied()
+}
+
+fn plan_refs(ps: &[Plan]) -> Vec<&Plan> {
+    ps.iter().collect()
+}
+
+fn week_plans(ws: &[Week]) -> Vec<&Plan> {
+    ws.iter().map(|w| &w.plan).collect()
 }
 
 fn item_ids(p: Option<&Plan>) -> Vec<&str> {
@@ -351,7 +366,7 @@ impl Merger {
         base: &Library,
         local: &Library,
         remote: &Library,
-        plans: &[Plan],
+        plans: &[&Plan],
     ) -> Library {
         let types = ordered([type_keys(base), type_keys(local), type_keys(remote)])
             .into_iter()
@@ -372,7 +387,7 @@ impl Merger {
 
     /// Plans by id. A plan deleted on one side survives, whole, if the other side changed it
     /// or any of its items.
-    fn plans(&mut self, base: &[Plan], local: &[Plan], remote: &[Plan]) -> Vec<Plan> {
+    fn plans(&mut self, base: &[&Plan], local: &[&Plan], remote: &[&Plan]) -> Vec<Plan> {
         let mut out = Vec::new();
         for id in ordered([plan_ids(base), plan_ids(local), plan_ids(remote)]) {
             let (b, l, r) = (
@@ -389,6 +404,25 @@ impl Merger {
             };
             out.extend(plan);
         }
+        out
+    }
+
+    /// Dated weeks, merged as plans keyed by the Monday, in Monday order.
+    fn weeks(&mut self, base: &[Week], local: &[Week], remote: &[Week]) -> Vec<Week> {
+        let mondays: HashMap<&str, NaiveDate> = [base, local, remote]
+            .into_iter()
+            .flatten()
+            .map(|w| (w.plan.id.as_str(), w.monday))
+            .collect();
+        let plans = self.plans(&week_plans(base), &week_plans(local), &week_plans(remote));
+        let mut out: Vec<Week> = plans
+            .into_iter()
+            .map(|plan| Week {
+                monday: mondays[plan.id.as_str()],
+                plan,
+            })
+            .collect();
+        out.sort_by_key(|w| w.monday);
         out
     }
 
@@ -458,7 +492,7 @@ impl Merger {
 /// Merge `local` and `remote`, both descended from `base`, the last synced document. Ties
 /// between equal stamps go to the higher of `local_device` and `remote_device`; pass `None`
 /// when the remote copy's writer is unknown. Plans, items and session types keep `base`'s
-/// order, followed by new ones from `local`, then from `remote`.
+/// order, followed by new ones from `local`, then from `remote`; weeks are in Monday order.
 #[must_use]
 pub fn merge(
     base: &Store,
@@ -472,12 +506,20 @@ pub fn merge(
         remote: remote_device,
         conflicts: Vec::new(),
     };
-    let plans = m.plans(&base.plans, &local.plans, &remote.plans);
+    let plans = m.plans(
+        &plan_refs(&base.plans),
+        &plan_refs(&local.plans),
+        &plan_refs(&remote.plans),
+    );
+    let weeks = m.weeks(&base.weeks, &local.weeks, &remote.weeks);
+    let profile = m.profile(&base.profile, &local.profile, &remote.profile);
+    let used: Vec<&Plan> = plans.iter().chain(weeks.iter().map(|w| &w.plan)).collect();
     let store = Store {
         version: STORE_VERSION,
-        profile: m.profile(&base.profile, &local.profile, &remote.profile),
-        library: m.library(&base.library, &local.library, &remote.library, &plans),
+        profile,
+        library: m.library(&base.library, &local.library, &remote.library, &used),
         plans,
+        weeks,
         export: m.export(&base.export, &local.export, &remote.export),
     };
     Merged {
@@ -746,6 +788,73 @@ mod tests {
             );
             assert_eq!(m.store.plans[0].days[2].last(), Some(&it));
         }
+    }
+
+    fn monday() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 9, 21).unwrap()
+    }
+
+    /// `s` with template `plan` applied to `monday()`, everything stamped at `secs`.
+    fn applied(s: &Store, plan: usize, secs: i64) -> Store {
+        let mut s = s.clone();
+        let id = s.plans[plan].id.clone();
+        assert!(s.apply_template(&id, monday(), 1));
+        let w = &mut s.weeks[0].plan;
+        w.updated_at = at(secs);
+        for it in w.days.iter_mut().flatten() {
+            it.updated_at = at(secs);
+        }
+        s
+    }
+
+    #[test]
+    fn same_template_applied_on_both_sides_merges_into_one_week() {
+        let b = base();
+        let (l, r) = (applied(&b, 1, 10), applied(&b, 1, 20));
+        for m in [run(&b, &l, &r), swapped(&b, &l, &r)] {
+            assert_eq!(m.conflicts, []);
+            assert_eq!(m.store.weeks.len(), 1);
+            let week = &m.store.weeks[0];
+            assert_eq!(week.monday, monday());
+            let n: usize = week.plan.days.iter().map(Vec::len).sum();
+            let template: usize = b.plans[1].days.iter().map(Vec::len).sum();
+            assert_eq!(n, template);
+        }
+        assert_eq!(run(&b, &l, &r).store, swapped(&b, &l, &r).store);
+    }
+
+    #[test]
+    fn week_edited_on_one_side_takes_the_edit() {
+        let b = applied(&base(), 0, 5);
+        let mut edited = b.clone();
+        let it = &mut edited.weeks[0].plan.days[2][0];
+        it.notes = "hills".into();
+        it.updated_at = at(10);
+        edited.weeks[0].plan.name = String::new();
+        edited.weeks[0].plan.updated_at = at(10);
+        // An earlier week started on the other side lands in Monday order.
+        let mut other = b.clone();
+        other.week_mut_or_insert(monday() - chrono::Days::new(7));
+        for m in [run(&b, &edited, &other), run(&b, &other, &edited)] {
+            assert_eq!(m.conflicts, []);
+            assert_eq!(m.store.weeks.len(), 2);
+            assert_eq!(m.store.weeks[1], edited.weeks[0]);
+            assert_eq!(m.store.weeks[0].monday, monday() - chrono::Days::new(7));
+        }
+    }
+
+    #[test]
+    fn deleted_type_comes_back_while_a_week_uses_it() {
+        let b = base();
+        let mut l = b.clone();
+        l.library.types.retain(|t| t.key != "padel");
+        for p in &mut l.plans {
+            for d in &mut p.days {
+                d.retain(|x| x.type_key != "padel");
+            }
+        }
+        let r = applied(&b, 0, 10);
+        assert!(run(&b, &l, &r).store.library.get("padel").is_some());
     }
 
     fn with_calendar(s: &Store, id: Option<&str>, secs: i64) -> Store {

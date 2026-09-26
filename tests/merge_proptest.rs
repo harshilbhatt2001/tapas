@@ -6,11 +6,11 @@
 
 use std::collections::HashSet;
 
-use chrono::DateTime;
+use chrono::{DateTime, Days, NaiveDate};
 use proptest::prelude::*;
 use tapas::{
     library::{new_item, starter_plan},
-    model::Store,
+    model::{Store, Week},
     sync::merge::merge,
 };
 use uuid::Uuid;
@@ -18,13 +18,27 @@ use uuid::Uuid;
 const LOCAL: Uuid = Uuid::from_u128(11);
 const REMOTE: Uuid = Uuid::from_u128(22);
 
-/// Two plans with the starter week's items spread across every day, so scripts have something
-/// to edit, move, delete or add to from the very first op.
+/// Number of distinct Mondays scripts can touch: two already hold a dated week in the base
+/// store, one is always empty so ops can exercise creating a week from scratch.
+const N_MONDAYS: usize = 3;
+
+fn monday_at(i: usize) -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 9, 21).unwrap() + Days::new(7 * i as u64)
+}
+
+/// Two plans with the starter week's items spread across every day, plus a dated week already
+/// applied from each template, so scripts have something to edit, move, delete or add to from
+/// the very first op, in both templates and dated weeks.
 fn base_store() -> Store {
-    Store {
+    let mut s = Store {
         plans: vec![starter_plan("Base"), starter_plan("Build")],
         ..Store::default()
-    }
+    };
+    let base_id = s.plans[0].id.clone();
+    let build_id = s.plans[1].id.clone();
+    assert!(s.apply_template(&base_id, monday_at(0), 1));
+    assert!(s.apply_template(&build_id, monday_at(1), 1));
+    s
 }
 
 /// One random edit. Indices are taken modulo whatever exists when the op runs, so every value
@@ -37,6 +51,11 @@ enum Op {
     Delete(usize, usize, usize),
     RenamePlan(usize, String),
     SetWeight(f64),
+    EditWeekNotes(usize, usize, usize, String),
+    MoveWeekItem(usize, usize, usize, usize),
+    AddWeekItem(usize, usize, usize),
+    DeleteWeekItem(usize, usize, usize),
+    ApplyTemplate(usize, usize),
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -59,6 +78,25 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         (any::<usize>(), any::<usize>(), any::<usize>()).prop_map(|(p, d, i)| Op::Delete(p, d, i)),
         (any::<usize>(), "[A-Za-z ]{1,12}").prop_map(|(p, n)| Op::RenamePlan(p, n)),
         (40.0f64..120.0).prop_map(Op::SetWeight),
+        (
+            any::<usize>(),
+            any::<usize>(),
+            any::<usize>(),
+            "[A-Za-z ]{0,12}"
+        )
+            .prop_map(|(m, d, i, t)| Op::EditWeekNotes(m, d, i, t)),
+        (
+            any::<usize>(),
+            any::<usize>(),
+            any::<usize>(),
+            any::<usize>()
+        )
+            .prop_map(|(m, d, i, to)| Op::MoveWeekItem(m, d, i, to)),
+        (any::<usize>(), any::<usize>(), any::<usize>())
+            .prop_map(|(m, d, t)| Op::AddWeekItem(m, d, t)),
+        (any::<usize>(), any::<usize>(), any::<usize>())
+            .prop_map(|(m, d, i)| Op::DeleteWeekItem(m, d, i)),
+        (any::<usize>(), any::<usize>()).prop_map(|(p, m)| Op::ApplyTemplate(p, m)),
     ]
 }
 
@@ -79,11 +117,22 @@ fn plan_index(p: usize, n: usize, exclude_first: bool) -> Option<usize> {
     })
 }
 
-fn apply(store: &mut Store, op: &Op, clock: &mut i64, exclude_first: bool) {
-    let mut now = || {
-        *clock += 1;
-        DateTime::from_timestamp(*clock, 0).unwrap()
-    };
+/// Maps a raw Monday index into range, optionally forced away from `monday_at(0)` so a script
+/// never touches the dated week holding the sentinel edit under test.
+fn monday_index(m: usize, exclude_first: bool) -> usize {
+    if exclude_first {
+        1 + m % (N_MONDAYS - 1)
+    } else {
+        m % N_MONDAYS
+    }
+}
+
+fn apply_plan_op(
+    store: &mut Store,
+    op: &Op,
+    now: &mut impl FnMut() -> DateTime<chrono::Utc>,
+    exclude_first: bool,
+) {
     let plans = store.plans.len();
     match op {
         Op::EditNotes(plan, day, item, text) => {
@@ -147,6 +196,98 @@ fn apply(store: &mut Store, op: &Op, clock: &mut i64, exclude_first: bool) {
             store.profile.weight = *weight;
             store.profile.updated_at = now();
         }
+        _ => unreachable!("not a plan op"),
+    }
+}
+
+fn apply_week_op(
+    store: &mut Store,
+    op: &Op,
+    now: &mut impl FnMut() -> DateTime<chrono::Utc>,
+    exclude_first: bool,
+) {
+    let plans = store.plans.len();
+    match op {
+        Op::EditWeekNotes(monday, day, item, text) => {
+            let monday = monday_at(monday_index(*monday, exclude_first));
+            let items = &mut store.week_mut_or_insert(monday).plan.days[day % 7];
+            if items.is_empty() {
+                return;
+            }
+            let item = item % items.len();
+            items[item].notes.clone_from(text);
+            items[item].updated_at = now();
+        }
+        Op::MoveWeekItem(monday, day, item, to_day) => {
+            let monday = monday_at(monday_index(*monday, exclude_first));
+            let week = &mut store.week_mut_or_insert(monday).plan;
+            let day = day % 7;
+            let items = &week.days[day];
+            if items.is_empty() {
+                return;
+            }
+            let item = item % items.len();
+            let mut moved = week.days[day].remove(item);
+            moved.updated_at = now();
+            week.days[to_day % 7].push(moved);
+        }
+        Op::AddWeekItem(monday, day, type_idx) => {
+            let monday = monday_at(monday_index(*monday, exclude_first));
+            let types = &store.library.types;
+            if types.is_empty() {
+                return;
+            }
+            let key = types[type_idx % types.len()].key.clone();
+            if let Some(mut added) = new_item(&store.library, &key) {
+                added.updated_at = now();
+                store.week_mut_or_insert(monday).plan.days[day % 7].push(added);
+            }
+        }
+        Op::DeleteWeekItem(monday, day, item) => {
+            let monday = monday_at(monday_index(*monday, exclude_first));
+            let items = &mut store.week_mut_or_insert(monday).plan.days[day % 7];
+            if items.is_empty() {
+                return;
+            }
+            items.remove(item % items.len());
+        }
+        Op::ApplyTemplate(plan, monday) => {
+            let Some(plan) = plan_index(*plan, plans, false) else {
+                return;
+            };
+            let template = store.plans[plan].clone();
+            let monday = monday_at(monday_index(*monday, exclude_first));
+            let applied = Week::apply(&template, monday);
+            let stamp = now();
+            let week = &mut store.week_mut_or_insert(monday).plan;
+            week.name = applied.plan.name;
+            week.days = applied.plan.days;
+            week.updated_at = stamp;
+            for it in week.days.iter_mut().flatten() {
+                it.updated_at = stamp;
+            }
+        }
+        _ => unreachable!("not a week op"),
+    }
+}
+
+fn apply(store: &mut Store, op: &Op, clock: &mut i64, exclude_first: bool) {
+    let mut now = || {
+        *clock += 1;
+        DateTime::from_timestamp(*clock, 0).unwrap()
+    };
+    match op {
+        Op::EditNotes(..)
+        | Op::Move(..)
+        | Op::Add(..)
+        | Op::Delete(..)
+        | Op::RenamePlan(..)
+        | Op::SetWeight(..) => apply_plan_op(store, op, &mut now, exclude_first),
+        Op::EditWeekNotes(..)
+        | Op::MoveWeekItem(..)
+        | Op::AddWeekItem(..)
+        | Op::DeleteWeekItem(..)
+        | Op::ApplyTemplate(..) => apply_week_op(store, op, &mut now, exclude_first),
     }
 }
 
@@ -167,7 +308,13 @@ fn canon(mut s: Store) -> Store {
             d.sort_by(|a, b| a.id.cmp(&b.id));
         }
     }
+    for w in &mut s.weeks {
+        for d in &mut w.plan.days {
+            d.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+    }
     s.plans.sort_by(|a, b| a.id.cmp(&b.id));
+    s.weeks.sort_by_key(|w| w.monday);
     s.library.types.sort_by(|a, b| a.key.cmp(&b.key));
     s
 }
@@ -244,6 +391,69 @@ proptest! {
         for t in &m.library.types {
             prop_assert!(type_keys.insert(t.key.clone()), "duplicate session type key {}", t.key);
         }
+
+        let mut mondays = HashSet::new();
+        for w in m.weeks.windows(2) {
+            prop_assert!(w[0].monday < w[1].monday, "weeks are not sorted by monday");
+        }
+        for w in &m.weeks {
+            prop_assert!(mondays.insert(w.monday), "duplicate week for monday {}", w.monday);
+            let mut item_ids = HashSet::new();
+            for day in &w.plan.days {
+                for it in day {
+                    prop_assert!(
+                        item_ids.insert(it.id.clone()),
+                        "duplicate item id {} in week {}",
+                        it.id,
+                        w.monday
+                    );
+                    prop_assert!(
+                        m.library.get(&it.type_key).is_some(),
+                        "item {} has an unresolved type_key {}",
+                        it.id,
+                        it.type_key
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both sides applying the same template to the same Monday, on top of whatever their
+    /// scripts already did, converges on one dated week with no duplicate item ids: applying a
+    /// template always replaces a week's items wholesale, so the two applications can never be
+    /// seen as independent edits to reconcile.
+    #[test]
+    fn applying_the_same_template_to_the_same_monday_merges_into_one_week(
+        local_ops in script_strategy(), remote_ops in script_strategy(),
+        plan in any::<usize>(), monday in any::<usize>()
+    ) {
+        let base = base_store();
+        let mut local = apply_script(&base, &local_ops, 1, false);
+        let mut remote = apply_script(&base, &remote_ops, 1_000_000, false);
+
+        let plan = plan_index(plan, base.plans.len(), false).unwrap();
+        let monday = monday_at(monday % N_MONDAYS);
+        let applied = Week::apply(&base.plans[plan], monday).plan;
+        for s in [&mut local, &mut remote] {
+            let week = &mut s.week_mut_or_insert(monday).plan;
+            week.name.clone_from(&applied.name);
+            week.days.clone_from(&applied.days);
+        }
+
+        let m = merge(&base, &local, &remote, LOCAL, Some(REMOTE)).store;
+        let weeks: Vec<&tapas::model::Week> =
+            m.weeks.iter().filter(|w| w.monday == monday).collect();
+        prop_assert_eq!(weeks.len(), 1);
+        let mut item_ids = HashSet::new();
+        for day in &weeks[0].plan.days {
+            for it in day {
+                prop_assert!(
+                    item_ids.insert(it.id.clone()),
+                    "duplicate item id {} in week {monday}",
+                    it.id
+                );
+            }
+        }
     }
 
     /// An item edited on only one side keeps that edit, no matter what the other side did
@@ -255,13 +465,18 @@ proptest! {
         let sentinel = format!("SENTINEL {text}");
         local.plans[0].days[0][0].notes.clone_from(&sentinel);
         local.plans[0].days[0][0].updated_at = DateTime::from_timestamp(500_000, 0).unwrap();
+        let week_sentinel = format!("WEEK SENTINEL {text}");
+        local.weeks[0].plan.days[0][0].notes.clone_from(&week_sentinel);
+        local.weeks[0].plan.days[0][0].updated_at = DateTime::from_timestamp(500_000, 0).unwrap();
 
         let remote = apply_script(&base, &remote_ops, 900_000, true);
         let m = merge(&base, &local, &remote, LOCAL, Some(REMOTE));
         prop_assert_eq!(&m.store.plans[0].days[0][0].notes, &sentinel);
+        prop_assert_eq!(&m.store.weeks[0].plan.days[0][0].notes, &week_sentinel);
 
         // And the same from the other device's point of view.
         let m2 = merge(&base, &remote, &local, REMOTE, Some(LOCAL));
         prop_assert_eq!(&m2.store.plans[0].days[0][0].notes, &sentinel);
+        prop_assert_eq!(&m2.store.weeks[0].plan.days[0][0].notes, &week_sentinel);
     }
 }

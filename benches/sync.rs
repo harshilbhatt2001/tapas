@@ -1,12 +1,12 @@
-//! Google Health sync: planned vs done, exercise type mapping and response page parsing.
+//! Google Health sync: reconciling a week, exercise type mapping and response page parsing.
 use std::hint::black_box;
 
 use chrono::{DateTime, Duration, Utc};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::json;
 use tapas::{
+    actuals,
     google::health::{map_exercise_type, parse_weights, parse_workouts},
-    services,
 };
 
 mod common;
@@ -53,14 +53,15 @@ fn weight_body() -> String {
 fn benches(c: &mut Criterion) {
     let (lib, plan) = common::starter();
     let workouts = common::workouts_year();
-    c.bench_function("planned_vs_done", |b| {
+    c.bench_function("reconcile", |b| {
         b.iter(|| {
-            services::planned_vs_done(
+            actuals::reconcile(
                 black_box(&lib),
                 black_box(&plan),
                 common::monday(),
                 black_box(&workouts),
                 71.1,
+                common::monday() + chrono::Days::new(7),
             )
         });
     });

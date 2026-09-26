@@ -1,7 +1,11 @@
 //! App state, event dispatch and background-task plumbing.
 
 use std::{
-    collections::BTreeSet, future::Future, path::PathBuf, sync::mpsc::Sender, time::Instant,
+    collections::{BTreeSet, HashSet},
+    future::Future,
+    path::PathBuf,
+    sync::mpsc::Sender,
+    time::Instant,
 };
 
 use anyhow::Result;
@@ -15,8 +19,9 @@ use ratatui::{
 use super::{editor, export, library, plans, profile, sync, week, widgets::Form};
 use crate::{
     export as ex,
-    google::{calendar::PushReport, health::Workout},
-    model::{Device, Plan, Store},
+    google::calendar::PushReport,
+    health_cache::{self, WeekActuals},
+    model::{Device, Plan, Store, Week},
     services::{self, SyncError},
     storage::{self, Paths},
     sync::Report,
@@ -53,12 +58,27 @@ impl Screen {
     }
 }
 
+/// What the week board shows and edits. Per session: the TUI opens on this week.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Board {
+    /// The dated week of this Monday.
+    Week(NaiveDate),
+    /// A template, by plan id.
+    Template(String),
+}
+
 /// Mutations that need a yes/no first.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     DeleteItem(String),
     LoadStarter,
     ClearWeek,
+    /// Replace the items of `weeks` weeks from `from` with the template's.
+    ApplyTemplate {
+        template: String,
+        from: NaiveDate,
+        weeks: u32,
+    },
     DeletePlan(usize),
     DeleteType(usize),
     DeleteEffort(usize, usize),
@@ -72,6 +92,10 @@ pub enum FormKind {
     Item(String),
     NewPlan,
     RenamePlan(usize),
+    /// Apply the template with this id to a range of weeks.
+    ApplyTemplate(String),
+    /// Show the week of a date.
+    GoTo,
     /// Session type by index; `None` creates one.
     Type(Option<usize>),
     /// Effort of a type; `None` creates one.
@@ -89,9 +113,27 @@ pub enum Modal {
         msg: String,
         action: Action,
     },
-    /// Library type to add to the selected day.
-    AddPicker(ListState),
+    Picker(Picker, ListState),
     Form(Box<Form>, FormKind),
+    /// Every metric of the selected block's workouts, one group per workout.
+    WorkoutDetails {
+        title: String,
+        workouts: Vec<Vec<String>>,
+    },
+}
+
+/// What a list-picker modal picks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Picker {
+    /// A library type to add to the selected day.
+    AddType,
+    /// A template to apply to the week on the board.
+    Template,
+    /// The `Item.workout` to set on item `item`, one per choice.
+    Workout {
+        item: String,
+        links: Vec<Option<String>>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -108,21 +150,24 @@ impl Task {
         match self {
             Task::Push => "Pushing to Google Calendar",
             Task::Weight => "Fetching weight from Google Health",
-            Task::Workouts => "Fetching workouts from Google Health",
+            Task::Workouts => "Fetching the week from Google Health",
             Task::Sync => "Syncing with Google Drive",
         }
     }
 }
 
 pub enum BgResult {
+    /// `quiet` pushes report only failures.
     Pushed {
-        plan_id: String,
+        quiet: bool,
         res: Result<PushReport>,
     },
     Weight(Result<Option<(f64, DateTime<Utc>)>>),
+    /// `before` is the week's cache as it was when the fetch started.
     Workouts {
         monday: NaiveDate,
-        res: Result<Vec<Workout>>,
+        before: Option<WeekActuals>,
+        res: Result<WeekActuals>,
     },
     /// `sent` is the store the sync started from, `store` what it left on disk.
     Synced {
@@ -178,6 +223,15 @@ pub enum SyncStatus {
     Error,
 }
 
+/// Google Health week fetches: one runs at a time and only the latest request waits.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActualsFetch {
+    pub running: Option<NaiveDate>,
+    pub queued: Option<NaiveDate>,
+    /// Weeks fetched this session; the automatic fetch skips them.
+    pub started: HashSet<NaiveDate>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LibFocus {
     #[default]
@@ -191,7 +245,10 @@ pub struct App {
     pub device: Device,
     pub screen: Screen,
     pub modal: Modal,
-    /// Selected day and card (index into the day sorted by start).
+    board: Board,
+    /// What the board shows for a week that is not stored yet.
+    unstored_week: Plan,
+    /// Selected day and card (index into the day's visible board slots).
     pub day: usize,
     pub card: usize,
     pub plan_sel: usize,
@@ -200,9 +257,12 @@ pub struct App {
     pub lib_focus: LibFocus,
     pub first_monday: NaiveDate,
     pub last_file: Option<PathBuf>,
-    /// Workouts fetched from Google Health for the week starting at the date.
-    pub done: Option<(NaiveDate, Vec<Workout>)>,
-    /// Show commute rides next to the Done line (off by default; `c` on the week screen).
+    /// The Google Health cache of the dated week last opened on the board.
+    pub actuals: Option<(NaiveDate, WeekActuals)>,
+    pub actuals_fetch: ActualsFetch,
+    /// Mondays of weeks to push quietly once the running push is done.
+    pub pending_pushes: BTreeSet<NaiveDate>,
+    /// Show commute rides on the board (off by default; `c` on the week screen).
     pub show_commutes: bool,
     pub status: Status,
     pub busy: BTreeSet<Task>,
@@ -222,23 +282,27 @@ pub struct App {
 impl App {
     #[must_use]
     pub fn new(paths: Paths, store: Store, device: Device) -> App {
-        let plan_sel = store.plan_index(device.active_plan.as_deref());
         let sync = services::sync_off(&paths).map_or(SyncStatus::Idle, SyncStatus::Off);
+        let monday = week::this_monday();
         App {
             paths,
             store,
             device,
             screen: Screen::Week,
             modal: Modal::None,
+            board: Board::Week(monday),
+            unstored_week: Week::new(monday).plan,
             day: 0,
             card: 0,
-            plan_sel,
+            plan_sel: 0,
             lib_type: 0,
             lib_effort: 0,
             lib_focus: LibFocus::Types,
             first_monday: ex::next_monday(Local::now().date_naive()),
             last_file: None,
-            done: None,
+            actuals: None,
+            actuals_fetch: ActualsFetch::default(),
+            pending_pushes: BTreeSet::new(),
             show_commutes: false,
             status: Status {
                 text: "Loaded. Press ? for keys.".into(),
@@ -256,26 +320,68 @@ impl App {
         }
     }
 
-    /// The active plan: this device's choice, or the first plan.
+    #[must_use]
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+
+    /// Show `board`; a dated week brings its Google Health cache and fetches it when stale.
+    pub fn set_board(&mut self, board: Board) {
+        if let Board::Week(monday) = board {
+            self.unstored_week = Week::new(monday).plan;
+            self.actuals = health_cache::load(&self.paths, monday).map(|a| (monday, a));
+            week::auto_fetch_actuals(self, monday);
+        }
+        self.board = board;
+        self.clamp();
+    }
+
+    /// The Google Health cache of the week on the board.
+    #[must_use]
+    pub fn board_actuals(&self) -> Option<&WeekActuals> {
+        let monday = self.board_monday()?;
+        self.actuals
+            .as_ref()
+            .filter(|(m, _)| *m == monday)
+            .map(|(_, a)| a)
+    }
+
+    /// Monday of the dated week on the board; `None` for a template.
+    #[must_use]
+    pub fn board_monday(&self) -> Option<NaiveDate> {
+        match self.board {
+            Board::Week(monday) => Some(monday),
+            Board::Template(_) => None,
+        }
+    }
+
+    /// Index in `store.plans` of the template on the board.
+    #[must_use]
+    pub fn board_template(&self) -> Option<usize> {
+        match &self.board {
+            Board::Template(id) => self.store.plans.iter().position(|p| p.id == *id),
+            Board::Week(_) => None,
+        }
+    }
+
+    /// The plan on the board: a template, a stored week, or an empty unstored week.
     #[must_use]
     pub fn plan(&self) -> &Plan {
-        self.store.plan_or_first(self.device.active_plan.as_deref())
+        if let Some(i) = self.board_template() {
+            return &self.store.plans[i];
+        }
+        self.board_monday()
+            .and_then(|m| self.store.week(m))
+            .map_or(&self.unstored_week, |w| &w.plan)
     }
 
+    /// The plan on the board, storing its week on the first edit.
     pub fn plan_mut(&mut self) -> &mut Plan {
-        self.store
-            .plan_or_first_mut(self.device.active_plan.as_deref())
-    }
-
-    /// Index of the active plan in `store.plans`.
-    #[must_use]
-    pub fn active(&self) -> usize {
-        self.store.plan_index(self.device.active_plan.as_deref())
-    }
-
-    /// Make plan `i` active on this device; saved by the next [`App::commit`].
-    pub fn set_active(&mut self, i: usize) {
-        self.device.active_plan = self.store.plans.get(i).map(|p| p.id.clone());
+        if let Some(i) = self.board_template() {
+            return &mut self.store.plans[i];
+        }
+        let monday = self.board_monday().unwrap_or_else(week::this_monday);
+        &mut self.store.week_mut_or_insert(monday).plan
     }
 
     pub fn info(&mut self, text: impl Into<String>) {
@@ -296,9 +402,7 @@ impl App {
     pub fn commit(&mut self) {
         self.store.normalize();
         self.clamp();
-        let saved = storage::save(&self.paths, &mut self.store)
-            .and_then(|()| storage::save_device(&self.paths, &self.device));
-        match saved {
+        match storage::save(&self.paths, &mut self.store) {
             Ok(()) => {
                 self.info("Saved");
                 sync::edited(self);
@@ -309,8 +413,12 @@ impl App {
 
     /// Keep selections inside their lists.
     pub fn clamp(&mut self) {
+        if matches!(self.board, Board::Template(_)) && self.board_template().is_none() {
+            self.set_board(Board::Week(week::this_monday()));
+            return;
+        }
         self.day = self.day.min(6);
-        let n = self.plan().days[self.day].len();
+        let n = week::day_slots(self, self.day).len();
         self.card = self.card.min(n.saturating_sub(1));
         self.plan_sel = self.plan_sel.min(self.store.plans.len() - 1);
         let types = &self.store.library.types;
@@ -362,9 +470,13 @@ impl App {
     pub fn on_bg(&mut self, res: BgResult) {
         self.busy.remove(&res.task());
         match res {
-            BgResult::Pushed { plan_id, res } => export::on_pushed(self, &plan_id, res),
+            BgResult::Pushed { quiet, res } => export::on_pushed(self, quiet, res),
             BgResult::Weight(res) => profile::on_weight(self, res),
-            BgResult::Workouts { monday, res } => export::on_workouts(self, monday, res),
+            BgResult::Workouts {
+                monday,
+                before,
+                res,
+            } => week::on_actuals(self, monday, before.as_ref(), res),
             BgResult::Synced {
                 manual,
                 sent,
@@ -428,30 +540,43 @@ impl App {
 
     fn on_modal_key(&mut self, modal: Modal, k: KeyEvent, ev: &Event) {
         match modal {
-            Modal::None | Modal::Help => {}
+            Modal::None | Modal::Help | Modal::WorkoutDetails { .. } => {}
             Modal::Confirm { msg, action } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => self.run(action),
                 KeyCode::Char('n') | KeyCode::Esc => self.info("Cancelled"),
                 _ => self.modal = Modal::Confirm { msg, action },
             },
-            Modal::AddPicker(mut state) => match k.code {
+            Modal::Picker(picker, mut state) => match k.code {
                 KeyCode::Esc => {}
                 KeyCode::Char('j') | KeyCode::Down => {
                     state.select_next();
-                    self.modal = Modal::AddPicker(state);
+                    self.modal = Modal::Picker(picker, state);
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     state.select_previous();
-                    self.modal = Modal::AddPicker(state);
+                    self.modal = Modal::Picker(picker, state);
                 }
                 KeyCode::Enter => {
-                    let n = self.store.library.types.len();
+                    let n = match &picker {
+                        Picker::AddType => self.store.library.types.len(),
+                        Picker::Template => self.store.plans.len(),
+                        Picker::Workout { links, .. } => links.len(),
+                    };
                     if let Some(i) = state.selected().filter(|_| n > 0) {
-                        let key = self.store.library.types[i.min(n - 1)].key.clone();
-                        week::add(self, &key);
+                        let i = i.min(n - 1);
+                        match picker {
+                            Picker::AddType => {
+                                let key = self.store.library.types[i].key.clone();
+                                week::add(self, &key);
+                            }
+                            Picker::Template => week::pick_template(self, i),
+                            Picker::Workout { item, mut links } => {
+                                week::link_workout(self, &item, links.swap_remove(i));
+                            }
+                        }
                     }
                 }
-                _ => self.modal = Modal::AddPicker(state),
+                _ => self.modal = Modal::Picker(picker, state),
             },
             Modal::Form(mut form, kind) => {
                 use super::widgets::FormEvent;
@@ -481,6 +606,8 @@ impl App {
             FormKind::Item(id) => editor::apply(self, form, id),
             FormKind::NewPlan => plans::apply_new(self, form),
             FormKind::RenamePlan(i) => plans::apply_rename(self, form, *i),
+            FormKind::ApplyTemplate(id) => plans::submit_apply(self, form, id),
+            FormKind::GoTo => week::go_to(self, form),
             FormKind::Type(i) => library::apply_type(self, form, *i),
             FormKind::Effort(t, e) => library::apply_effort(self, form, *t, *e),
             FormKind::Profile => profile::apply(self, form),
@@ -493,6 +620,11 @@ impl App {
             Action::DeleteItem(id) => week::delete(self, &id),
             Action::LoadStarter => week::load_starter(self),
             Action::ClearWeek => week::clear(self),
+            Action::ApplyTemplate {
+                template,
+                from,
+                weeks,
+            } => plans::apply_template(self, &template, from, weeks),
             Action::DeletePlan(i) => plans::delete(self, i),
             Action::DeleteType(i) => library::delete_type(self, i),
             Action::DeleteEffort(t, e) => library::delete_effort(self, t, e),

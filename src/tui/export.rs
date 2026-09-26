@@ -1,4 +1,4 @@
-//! Screen 5: file export, Google Calendar push and Google Health workouts.
+//! Screen 5: file export, Google Calendar push and Google login state.
 
 use std::{fs, path::PathBuf};
 
@@ -15,21 +15,20 @@ use ratatui::{
 };
 
 use super::{
-    app::{App, BgResult, FormKind, Screen, SyncStatus, Task},
+    app::{App, BgResult, FormKind, SyncStatus, Task},
     widgets::{DIM, Field, Form, LINE, OK, WARN},
 };
 use crate::{
-    export::{self, ExportOpts},
-    google::{auth::Api, calendar::PushReport, health::Workout},
+    export,
+    google::{auth::Api, calendar::PushReport},
+    health_cache::{self, WeekActuals},
+    model::{DAY_FMT, week_monday},
     services::{self, Prompt},
 };
 
-pub fn opts(app: &App) -> ExportOpts {
-    ExportOpts {
-        first_monday: app.first_monday,
-        weeks: app.store.export.weeks,
-        include_life: app.store.export.include_life,
-    }
+/// Monday of the first exported week.
+fn from_monday(app: &App) -> NaiveDate {
+    week_monday(app.first_monday)
 }
 
 pub fn on_key(app: &mut App, k: KeyEvent) {
@@ -43,6 +42,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
                     Field::text("First Monday", app.first_monday.to_string()),
                     Field::text("Weeks 1-52", s.weeks.to_string()),
                     Field::toggle("Work & commute", s.include_life),
+                    Field::toggle("Auto-push actuals", s.auto_push_actuals),
                     Field::text("Calendar name", s.calendar_name.clone()),
                 ],
             );
@@ -50,8 +50,10 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('i') => write(app, "ics"),
         KeyCode::Char('c') => write(app, "csv"),
-        KeyCode::Char('g') => push(app),
-        KeyCode::Char('f') => fetch_workouts(app),
+        KeyCode::Char('g') => {
+            let (from, weeks) = (from_monday(app), app.store.export.weeks);
+            start_push_weeks(app, from, weeks, false);
+        }
         KeyCode::Char('s') => super::sync::start(app, true),
         _ => {}
     }
@@ -69,7 +71,7 @@ pub fn apply(app: &mut App, form: &Form) -> Result<(), String> {
     if !(1..=52).contains(&weeks) {
         return Err("Weeks 1-52: between 1 and 52".into());
     }
-    let name = form.text(3);
+    let name = form.text(4);
     if name.is_empty() {
         return Err("Calendar name: can't be empty".into());
     }
@@ -77,6 +79,7 @@ pub fn apply(app: &mut App, form: &Form) -> Result<(), String> {
     let s = &mut app.store.export;
     s.weeks = weeks;
     s.include_life = form.toggle(2);
+    s.auto_push_actuals = form.toggle(3);
     if s.calendar_name != name {
         // A different name means a different calendar next push.
         name.clone_into(&mut s.calendar_name);
@@ -93,23 +96,24 @@ fn out_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// `tapas-base-week.ics`
-fn file_name(plan: &str, ext: &str) -> String {
-    format!("tapas-{}.{ext}", slug::slugify(plan))
-}
-
 fn write(app: &mut App, ext: &str) {
     let res = (|| -> Result<PathBuf> {
-        let plan = app.plan();
-        let o = opts(app);
-        let events = export::events(&app.store, plan, &o);
+        let (from, s) = (from_monday(app), &app.store.export);
+        let events = export::range_events(
+            &app.store,
+            from,
+            s.weeks,
+            |monday| health_cache::load(&app.paths, monday),
+            Local::now().date_naive(),
+            s.include_life,
+        );
         anyhow::ensure!(!events.is_empty(), "nothing to export");
         let text = if ext == "ics" {
-            export::to_ics(plan, &events, o.weeks)
+            export::to_ics(&s.calendar_name, &events)
         } else {
-            export::to_google_csv(&events, o.weeks)?
+            export::to_google_csv(&events)?
         };
-        let path = out_dir().join(file_name(&plan.name, ext));
+        let path = out_dir().join(format!("tapas-{from}.{ext}"));
         fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
         Ok(path)
     })();
@@ -122,70 +126,67 @@ fn write(app: &mut App, ext: &str) {
     }
 }
 
-fn push(app: &mut App) {
+/// Push the `weeks` dated weeks from `from` to Google Calendar in the background; `quiet`
+/// reports only a failure.
+pub fn start_push_weeks(app: &mut App, from: NaiveDate, weeks: u32, quiet: bool) {
     if let Err(e) = services::require_login(&app.paths, Api::Calendar) {
         app.error(format!("{e:#}"));
         return;
     }
-    let (paths, store, o) = (app.paths.clone(), app.store.clone(), opts(app));
-    let plan = app.plan().clone();
+    let (paths, store) = (app.paths.clone(), app.store.clone());
     app.spawn(Task::Push, async move {
-        let res = services::push_plan(&paths, &store, &plan, &o, Prompt::Never).await;
-        BgResult::Pushed {
-            plan_id: plan.id,
-            res,
-        }
+        let res = services::push_weeks(&paths, &store, from, weeks, Prompt::Never).await;
+        BgResult::Pushed { quiet, res }
     });
 }
 
-pub fn on_pushed(app: &mut App, plan_id: &str, res: Result<PushReport>) {
+/// Push the week of `monday` quietly when auto-push is on, Calendar is logged in and the
+/// fetched actuals `after` change its past days from `before`; after the running push if any.
+pub fn push_if_past_changed(
+    app: &mut App,
+    monday: NaiveDate,
+    before: Option<&WeekActuals>,
+    after: &WeekActuals,
+) {
+    let s = &app.store.export;
+    if !s.auto_push_actuals
+        || !services::is_logged_in(&app.paths, Api::Calendar)
+        || !export::past_events_changed(
+            &app.store,
+            monday,
+            before,
+            after,
+            Local::now().date_naive(),
+            s.include_life,
+        )
+    {
+        return;
+    }
+    if app.busy.contains(&Task::Push) {
+        app.pending_pushes.insert(monday);
+    } else {
+        start_push_weeks(app, monday, 1, true);
+    }
+}
+
+pub fn on_pushed(app: &mut App, quiet: bool, res: Result<PushReport>) {
     match res {
         Ok(r) => {
-            let name = app
-                .store
-                .plans
-                .iter()
-                .find(|p| p.id == plan_id)
-                .map_or("plan", |p| p.name.as_str())
-                .to_owned();
-            app.store.export.calendar_id = Some(r.calendar_id);
-            app.commit();
-            app.info(format!(
-                "Pushed {name} to \"{}\": {} created, {} replaced",
-                app.store.export.calendar_name, r.created, r.deleted
-            ));
+            if app.store.export.calendar_id.as_ref() != Some(&r.calendar_id) {
+                app.store.export.calendar_id = Some(r.calendar_id);
+                app.commit();
+            }
+            if !quiet {
+                app.info(format!(
+                    "Pushed to \"{}\": {} new, {} updated, {} removed, {} unchanged",
+                    app.store.export.calendar_name, r.inserted, r.updated, r.deleted, r.unchanged
+                ));
+            }
         }
         Err(e) => app.error(format!("Push: {e:#}")),
     }
-}
-
-fn fetch_workouts(app: &mut App) {
-    if let Err(e) = services::require_login(&app.paths, Api::Health) {
-        app.error(format!("{e:#}"));
-        return;
-    }
-    let monday = services::week_monday(Local::now().date_naive());
-    let paths = app.paths.clone();
-    app.spawn(Task::Workouts, async move {
-        let res = services::week_workouts(&paths, monday, Prompt::Never).await;
-        BgResult::Workouts { monday, res }
-    });
-}
-
-pub fn on_workouts(app: &mut App, monday: NaiveDate, res: Result<Vec<Workout>>) {
-    match res {
-        Ok(w) => {
-            let weight = app.store.profile.weight;
-            let commutes = w.iter().filter(|x| services::is_commute(x, weight)).count();
-            app.info(format!(
-                "{} workouts and {commutes} commute rides this week from Google Health; see the \
-                 Done lines on screen 1 (c shows commutes)",
-                w.len() - commutes
-            ));
-            app.done = Some((monday, w));
-            app.screen = Screen::Week;
-        }
-        Err(e) => app.error(format!("Workouts: {e:#}")),
+    if let Some(monday) = app.pending_pushes.pop_first() {
+        start_push_weeks(app, monday, 1, true);
     }
 }
 
@@ -221,9 +222,18 @@ pub fn google_state(app: &App) -> Line<'static> {
     }
 }
 
+/// `1 week`, `4 weeks`
+fn weeks_text(weeks: u32) -> String {
+    if weeks == 1 {
+        "1 week".into()
+    } else {
+        format!("{weeks} weeks")
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let s = &app.store.export;
-    let [table, text] = Layout::vertical([Constraint::Length(7), Constraint::Fill(1)]).areas(area);
+    let [table, text] = Layout::vertical([Constraint::Length(8), Constraint::Fill(1)]).areas(area);
     let rows = [
         ("First Monday", app.first_monday.to_string()),
         ("Weeks", s.weeks.to_string()),
@@ -233,6 +243,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 "included"
             } else {
                 "left out"
+            }
+            .into(),
+        ),
+        (
+            "Auto-push",
+            if s.auto_push_actuals {
+                "actuals after each Health fetch"
+            } else {
+                "off"
             }
             .into(),
         ),
@@ -248,10 +267,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Table::new(rows, [Constraint::Length(16), Constraint::Fill(1)]).block(
             Block::bordered()
-                .title(format!(" Export {} ", app.plan().name))
+                .title(format!(
+                    " Export {} from {} ",
+                    weeks_text(s.weeks),
+                    from_monday(app).format(DAY_FMT)
+                ))
                 .title_bottom(
                     Line::from(
-                        " e edit · i write .ics · c write CSV · g push to Google Calendar · f fetch workouts · s sync ",
+                        " e edit · i write .ics · c write CSV · g push to Google Calendar · s sync",
                     )
                     .fg(DIM),
                 )
@@ -277,7 +300,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Style::new().fg(DIM),
     ));
     body.push(Line::styled(
-        "Push: tapas keeps its own calendar and replaces this plan's events on every push.",
+        "Push: tapas keeps its own calendar with one event per session of each week, updating only what changed; past days show what Google Health recorded.",
         Style::new().fg(DIM),
     ));
     f.render_widget(

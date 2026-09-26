@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     google::drive::{Drive, RemoteMeta, RemoteRevision},
-    model::{DAYS, Device, Library, STORE_VERSION, Store},
+    model::{DAY_FMT, DAYS, Device, Library, STORE_VERSION, Store},
     storage::{self, Paths},
 };
 use merge::{Conflict, Entity, Merged, Side};
@@ -570,21 +570,24 @@ pub async fn remote_status<R: Remote>(
     Ok((drift, files))
 }
 
-/// `Tue Run in "Base": kept the other machine's edit`, naming things from `store`.
+/// `Tue Run in plan "Base": kept the other machine's edit`, or `… in week of Mon 21 Sep: …`,
+/// naming things from `store`.
 #[must_use]
 pub fn describe(c: &Conflict, store: &Store) -> String {
-    let plan = |id: &str| store.plans.iter().find(|p| p.id == id);
-    let plan_name =
-        |id: &str| plan(id).map_or_else(|| id.to_owned(), |p| format!("\"{}\"", p.name));
+    let plan = |id: &str| store.every_plan().find(|p| p.id == id);
+    let plan_name = |id: &str| match store.weeks.iter().find(|w| w.plan.id == id) {
+        Some(w) => format!("week of {}", w.monday.format(DAY_FMT)),
+        None => plan(id).map_or_else(|| format!("plan {id}"), |p| format!("plan \"{}\"", p.name)),
+    };
     let what = match &c.entity {
-        Entity::Plan(id) => format!("plan {}", plan_name(id)),
+        Entity::Plan(id) => plan_name(id),
         Entity::Item { plan: id, item } => match plan(id).and_then(|p| Some((p, p.find(item)?))) {
             Some((p, (d, k))) => {
                 let key = &p.days[d][k].type_key;
                 let label = store.library.get(key).map_or(key.as_str(), |t| &t.label);
-                format!("{} {label} in \"{}\"", DAYS[d], p.name)
+                format!("{} {label} in {}", DAYS[d], plan_name(id))
             }
-            None => format!("a session in plan {}", plan_name(id)),
+            None => format!("a session in {}", plan_name(id)),
         },
         Entity::SessionType(key) => format!("session type {key}"),
         Entity::Profile => "profile".into(),
@@ -784,7 +787,6 @@ mod tests {
             let paths = Paths::under(dir.path());
             let device = Device {
                 device_id: Uuid::from_u128(id),
-                active_plan: None,
             };
             Machine {
                 _dir: dir,
@@ -949,7 +951,7 @@ mod tests {
         assert_eq!(storage::parse(&fs::read(saved).unwrap()).unwrap(), before);
         let text = describe(&conflicts[0], &b.store);
         assert!(text.starts_with("Mon "), "{text}");
-        assert!(text.contains("in \"Base\": kept"), "{text}");
+        assert!(text.contains("in plan \"Base\": kept"), "{text}");
     }
 
     #[tokio::test]

@@ -611,6 +611,7 @@
     "weeks": 1,
     "calendar_name": "Training",
     "calendar_id": null,
+    "auto_push_actuals": true,
     "updated_at": "1970-01-01T00:00:00Z"
   }
 }

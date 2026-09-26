@@ -1,9 +1,9 @@
 # tapas
 
 A terminal training-week planner. Lay out a week of sessions (runs, rides, strength, life
-blocks), see per-day load, energy and fuelling guidance, export the plan as iCalendar or
-Google Calendar CSV, push it to Google Calendar and compare it with workouts and weight from
-Google Health. It is a [ratatui](https://ratatui.rs) port of a single-page web artifact
+blocks), see per-day load, energy and fuelling guidance, compare dated weeks with workouts and
+weight from Google Health, and export them as iCalendar or Google Calendar CSV or push them to
+Google Calendar, past days showing what was done. It is a [ratatui](https://ratatui.rs) port of a single-page web artifact
 (`reference/artifact-training-week-planner.html`).
 
 ## Install
@@ -25,7 +25,7 @@ cargo install --locked --path .
 ### Shell completion
 
 The Nix package installs completions for bash, fish and zsh. With a Cargo install, register
-them yourself; `--plan` completes your saved plan names.
+them yourself; `tapas apply` completes your saved template names.
 
 ```sh
 echo 'COMPLETE=fish tapas | source' > ~/.config/fish/completions/tapas.fish   # fish
@@ -138,15 +138,15 @@ machine at a time, and merge or delete such copies by hand.
 
 ```
 tapas                                   # TUI
-tapas export ics|csv [--plan N] [--start YYYY-MM-DD] [--weeks N] [--life] [-o FILE]
+tapas export ics|csv [--from YYYY-MM-DD] [--weeks N] [--life] [-o FILE]  # dated weeks
 tapas plans                             # list templates
 tapas apply <template> [--from D] [--weeks N] [--replace]  # copy into dated weeks
 tapas week [--date D]                   # print the dated week containing D
 tapas google setup <client_secret.json> # copy OAuth client into config dir
 tapas google login                      # browser consent, caches tokens
-tapas google push [--plan N] [--start D] [--weeks N]
+tapas google push [--from D] [--weeks N]  # dated weeks, updating only what changed
 tapas health weight [--apply]           # latest weight, optionally into profile
-tapas health week [--start D]           # planned vs done for a week
+tapas actuals [--weeks N] [--push]      # fetch the last N weeks, print done vs planned
 tapas sync [--keep local|remote]        # sync the store with Google Drive
 tapas sync status                       # what a sync would find, without writing
 ```

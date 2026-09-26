@@ -1,89 +1,85 @@
-//! Calendar export: building the week's events and serialising them to iCalendar, Google
+//! Calendar export: building dated weeks' events and serialising them to iCalendar, Google
 //! CSV and Calendar API events.
 use std::hint::black_box;
 
+use chrono::{Days, NaiveDate};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use tapas::{
-    export::{self, ExportEvent, ExportOpts},
+    export::{self, ExportEvent},
     google::calendar,
     model::{Library, Plan, Store},
-    services,
 };
 
 mod common;
 
-/// One week from the bench Monday, life items included.
-fn opts() -> ExportOpts {
-    ExportOpts {
-        first_monday: common::monday(),
-        weeks: 1,
-        include_life: true,
-    }
+/// A day before the bench Monday, so every item is as planned.
+fn today() -> NaiveDate {
+    common::monday() - Days::new(1)
 }
 
-fn store((library, plan): (Library, Plan)) -> Store {
-    Store {
+/// A store whose template `plan` is applied to `weeks` weeks from the bench Monday.
+fn store((library, plan): (Library, Plan), weeks: u32) -> Store {
+    let id = plan.id.clone();
+    let mut s = Store {
         library,
         plans: vec![plan],
         ..Store::default()
-    }
+    };
+    assert!(s.apply_template(&id, common::monday(), weeks));
+    s
 }
 
-/// The starter store and its exported first week.
-fn starter_events() -> (Store, Vec<ExportEvent>) {
-    let s = store(common::starter());
-    let evs = export::events(&s, &s.plans[0], &opts());
-    (s, evs)
+/// The starter template applied to `weeks` weeks, life items included.
+fn starter_events(weeks: u32) -> Vec<ExportEvent> {
+    let s = store(common::starter(), weeks);
+    export::range_events(&s, common::monday(), weeks, |_| None, today(), true)
 }
 
 fn events(c: &mut Criterion) {
-    let opts = opts();
-    let mut g = c.benchmark_group("events");
+    let mut g = c.benchmark_group("week_events");
     for (name, s) in [
-        ("starter", store(common::starter())),
-        ("huge", store(common::huge())),
+        ("starter", store(common::starter(), 1)),
+        ("huge", store(common::huge(), 1)),
     ] {
         g.bench_function(BenchmarkId::from_parameter(name), |b| {
-            b.iter(|| export::events(black_box(&s), black_box(&s.plans[0]), black_box(&opts)));
+            b.iter(|| export::week_events(black_box(&s), common::monday(), None, today(), true));
         });
     }
     g.finish();
 }
 
 fn to_ics(c: &mut Criterion) {
-    let (s, evs) = starter_events();
     let mut g = c.benchmark_group("to_ics");
     for weeks in [1, 52] {
-        g.bench_with_input(BenchmarkId::from_parameter(weeks), &weeks, |b, &w| {
-            b.iter(|| export::to_ics(black_box(&s.plans[0]), black_box(&evs), black_box(w)));
+        let evs = starter_events(weeks);
+        g.bench_with_input(BenchmarkId::from_parameter(weeks), &evs, |b, evs| {
+            b.iter(|| export::to_ics("Training", black_box(evs)));
         });
     }
     g.finish();
 }
 
 fn to_google_csv(c: &mut Criterion) {
-    let (_, evs) = starter_events();
     let mut g = c.benchmark_group("to_google_csv");
     for weeks in [1u32, 12, 52] {
-        g.throughput(Throughput::Elements(evs.len() as u64 * u64::from(weeks)));
-        g.bench_with_input(BenchmarkId::from_parameter(weeks), &weeks, |b, &w| {
-            b.iter(|| export::to_google_csv(black_box(&evs), black_box(w)).expect("csv"));
+        let evs = starter_events(weeks);
+        g.throughput(Throughput::Elements(evs.len() as u64));
+        g.bench_with_input(BenchmarkId::from_parameter(weeks), &evs, |b, evs| {
+            b.iter(|| export::to_google_csv(black_box(evs)).expect("csv"));
         });
     }
     g.finish();
 }
 
 fn to_event(c: &mut Criterion) {
-    let (s, evs) = starter_events();
-    let cal = services::cal_events(&evs);
-    let plan_id = &s.plans[0].id;
+    let evs = starter_events(1);
     let mut g = c.benchmark_group("to_event");
-    g.throughput(Throughput::Elements(cal.len() as u64));
+    g.throughput(Throughput::Elements(evs.len() as u64));
     g.bench_function(BenchmarkId::from_parameter("starter"), |b| {
         b.iter(|| {
-            black_box(&cal)
+            black_box(&evs)
                 .iter()
-                .map(|ev| calendar::to_event(ev, plan_id, 1, black_box("Europe/Amsterdam")))
+                .map(|ev| calendar::to_event(ev, black_box("Europe/Amsterdam")))
                 .collect::<anyhow::Result<Vec<_>>>()
                 .expect("valid events")
         });

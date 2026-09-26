@@ -356,6 +356,8 @@ pub struct ExportSettings {
     pub calendar_name: String,
     /// Google Calendar id of the calendar this app created, once it exists.
     pub calendar_id: Option<String>,
+    /// Push a past week to Calendar when a Health fetch changes what was done in it.
+    pub auto_push_actuals: bool,
     /// Last change, stamped by `storage::save`; the merge's last-writer-wins clock.
     pub updated_at: DateTime<Utc>,
 }
@@ -367,6 +369,7 @@ impl Default for ExportSettings {
             weeks: 1,
             calendar_name: "Training".into(),
             calendar_id: None,
+            auto_push_actuals: true,
             updated_at: DateTime::UNIX_EPOCH,
         }
     }

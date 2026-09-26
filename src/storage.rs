@@ -87,6 +87,12 @@ impl Paths {
     pub fn sync_dir(&self) -> PathBuf {
         self.data_dir.join("sync")
     }
+
+    /// Google Health cache, one `<monday>.json` per week; never synced.
+    #[must_use]
+    pub fn health_dir(&self) -> PathBuf {
+        self.data_dir.join("health")
+    }
 }
 
 /// Write to a temporary file next to `path`, then rename it over the old one, so readers and
@@ -210,7 +216,7 @@ mod tests {
         assert_eq!(s.plans.len(), 1);
         assert_eq!(s.plans[0].name, "Week 1");
         assert!(s.plans[0].is_empty());
-        assert_eq!(device.active_plan, None);
+        assert!(s.weeks.is_empty());
         assert_eq!(load(&paths).unwrap().1, device);
     }
 

@@ -2,6 +2,7 @@
 //! even when idle, so the steady-state per-frame cost is what matters.
 use std::hint::black_box;
 
+use chrono::{Days, TimeDelta, Utc};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use ratatui::{
     Terminal,
@@ -9,9 +10,10 @@ use ratatui::{
     crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers},
 };
 use tapas::{
-    model::{Device, Library, Plan, Store},
+    health_cache::WeekActuals,
+    model::{Device, Library, Plan, Store, Week},
     storage::Paths,
-    tui::{App, draw},
+    tui::{App, Board, draw},
 };
 use tempfile::TempDir;
 
@@ -23,11 +25,14 @@ const SIZES: [(u16, u16); 2] = [(200, 60), (120, 40)];
 /// Screen names in tab order; tab `n` is selected with key `'1' + n`.
 const SCREENS: [&str; 5] = ["week", "plans", "library", "profile", "export"];
 
-/// A deterministic app: fixed Monday, first day selected, paths under a throwaway dir so a
-/// stray save could never touch the real store. The `TempDir` must outlive the app.
+/// A deterministic app: the first template on the board, fixed Monday, first day selected,
+/// paths under a throwaway dir so a stray save could never touch the real store. The
+/// `TempDir` must outlive the app.
 fn app(store: Store) -> (TempDir, App) {
     let dir = tempfile::tempdir().expect("tempdir");
+    let template = store.plans[0].id.clone();
     let mut app = App::new(Paths::under(dir.path()), store, Device::default());
+    app.set_board(Board::Template(template));
     app.first_monday = common::monday();
     app.day = 0;
     app.card = 0;
@@ -107,6 +112,40 @@ fn week_plan_size(c: &mut Criterion) {
     g.finish();
 }
 
+/// The starter week applied to a past Monday with a workout a day: the planned-vs-done board.
+fn dated_week(c: &mut Criterion) {
+    let year = Days::new(364);
+    let monday = common::monday() - year;
+    let mut store = common::store_starter();
+    store.weeks = vec![Week::apply(&store.plans[0], monday)];
+    let workouts = common::workouts_year()
+        .into_iter()
+        .take(7)
+        .map(|mut w| {
+            w.day = w.day - year;
+            w.start -= TimeDelta::days(364);
+            w.end -= TimeDelta::days(364);
+            w
+        })
+        .collect();
+    let (_dir, mut app) = app(store);
+    app.set_board(Board::Week(monday));
+    app.actuals = Some((
+        monday,
+        WeekActuals {
+            fetched_at: Utc::now(),
+            workouts,
+            heart_rate: Vec::new(),
+        },
+    ));
+    let mut g = c.benchmark_group("dated_week");
+    for size in SIZES {
+        let id = BenchmarkId::new("actuals", format!("{}x{}", size.0, size.1));
+        g.bench_function(id, |b| steady(b, size, &mut app));
+    }
+    g.finish();
+}
+
 fn editor(c: &mut Criterion) {
     let mut g = c.benchmark_group("editor");
     let (_dir, mut app) = app(common::store_starter());
@@ -141,5 +180,12 @@ fn first_frame(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(group, screens, week_plan_size, editor, first_frame);
+criterion_group!(
+    group,
+    screens,
+    week_plan_size,
+    dated_week,
+    editor,
+    first_frame
+);
 criterion_main!(group);

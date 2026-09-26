@@ -29,7 +29,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Tabs},
 };
 
-pub use app::App;
+pub use app::{App, Board};
 use app::{Background, Modal, Screen};
 use widgets::{DIM, LINE, WARN, message_popup};
 
@@ -53,6 +53,7 @@ pub fn run(paths: Paths, store: Store, device: Device) -> Result<()> {
         handle: rt.handle().clone(),
         tx,
     });
+    app.set_board(app.board().clone());
     sync::start(&mut app, false);
 
     // Chained under ratatui's own hook, which restores the terminal first.
@@ -135,14 +136,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Span::raw(" tapas").bold(),
                 Span::styled("  training week planner", Style::new().fg(DIM)),
             ]),
-            Line::from(vec![
-                Span::styled(" plan ", Style::new().fg(DIM)),
-                Span::raw(plan.name.clone()).bold(),
-                Span::styled(
-                    format!("  ({} of {})", app.active() + 1, app.store.plans.len()),
-                    Style::new().fg(DIM),
-                ),
-            ]),
             {
                 let mut l = export::google_state(app);
                 l.spans.insert(0, Span::raw(" "));
@@ -212,9 +205,21 @@ fn draw_modal(f: &mut Frame, app: &mut App) {
             message_popup(f, "Confirm", body, WARN);
             app.modal = Modal::Confirm { msg, action };
         }
-        Modal::AddPicker(mut state) => {
-            week::draw_picker(f, app, &mut state);
-            app.modal = Modal::AddPicker(state);
+        Modal::Picker(picker, mut state) => {
+            week::draw_picker(f, app, &picker, &mut state);
+            app.modal = Modal::Picker(picker, state);
+        }
+        Modal::WorkoutDetails { title, workouts } => {
+            let mut lines: Vec<Line> = Vec::new();
+            for (i, metrics) in workouts.iter().enumerate() {
+                if i > 0 {
+                    lines.push(Line::raw(""));
+                }
+                lines.extend(metrics.iter().map(|m| Line::raw(m.clone())));
+            }
+            lines.push(Line::styled("Any key closes", Style::new().fg(DIM)));
+            message_popup(f, &title, Text::from(lines), Color::White);
+            app.modal = Modal::WorkoutDetails { title, workouts };
         }
         Modal::Form(form, kind) => {
             match &kind {
@@ -232,23 +237,31 @@ fn help(screen: Screen) -> Text<'static> {
         Screen::Week => &[
             ("h/l ←/→", "previous / next day"),
             ("j/k ↓/↑", "next / previous session"),
+            ("[ ]", "previous / next week"),
+            ("t", "this week"),
+            ("g", "go to the week of a date"),
+            ("p", "apply a template to this week"),
             ("a", "add a session to the day"),
-            ("Enter e", "edit session"),
+            ("Enter", "edit session; metrics of a done block or workout"),
+            ("e", "edit session"),
+            ("m", "link the session to a Google Health workout"),
             ("y", "duplicate session"),
             ("d", "delete session"),
             ("< >", "move session to previous / next day"),
             ("S", "load the starter week"),
             ("X", "clear the week"),
+            ("r", "fetch this week from Google Health again"),
             ("c", "show / hide commute rides from Google Health"),
             ("click", "select a session or day"),
         ],
         Screen::Plans => &[
-            ("j/k", "select plan"),
-            ("Enter", "make active"),
-            ("n", "new empty plan"),
-            ("c", "copy plan"),
-            ("r", "rename plan"),
-            ("d", "delete plan"),
+            ("j/k", "select template"),
+            ("Enter", "edit on the board"),
+            ("A", "apply to a range of weeks"),
+            ("n", "new empty template"),
+            ("c", "copy template"),
+            ("r", "rename template"),
+            ("d", "delete template"),
         ],
         Screen::Library => &[
             ("h/l Tab", "types / efforts pane"),
@@ -267,7 +280,6 @@ fn help(screen: Screen) -> Text<'static> {
             ("i", "write .ics to Downloads"),
             ("c", "write Google CSV to Downloads"),
             ("g", "push plan to Google Calendar"),
-            ("f", "fetch this week's workouts"),
             ("s", "sync with Google Drive now"),
         ],
     };
@@ -294,7 +306,10 @@ fn help(screen: Screen) -> Text<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::starter_plan;
+    use crate::{
+        google::health::Workout, health_cache::WeekActuals, library::starter_plan, model::Item,
+    };
+    use chrono::{Days, Local, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     fn app() -> App {
@@ -302,11 +317,171 @@ mod tests {
             plans: vec![starter_plan("Base")],
             ..Store::default()
         };
-        App::new(
+        let id = store.plans[0].id.clone();
+        let mut a = App::new(
             Paths::under(std::path::Path::new("/nonexistent/tapas")),
             store,
             Device::default(),
-        )
+        );
+        a.set_board(Board::Template(id));
+        a
+    }
+
+    fn press(a: &mut App, c: char) {
+        a.handle_event(&ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Char(c)),
+        ));
+    }
+
+    #[test]
+    fn dated_weeks_are_stored_on_first_edit() {
+        let mut a = app();
+        let this = week::this_monday();
+        press(&mut a, 't');
+        assert_eq!(a.board(), &Board::Week(this));
+        let s = render(&mut a, 180, 50);
+        assert!(s.contains("empty · p to apply"), "{s}");
+        assert!(s.contains(&format!("Week of {}", this.format("%a %-d %b %Y"))));
+        assert!(a.store.weeks.is_empty());
+
+        press(&mut a, 'S');
+        assert_eq!(a.store.weeks.len(), 1);
+        assert_eq!(a.store.weeks[0].monday, this);
+        assert_eq!(a.store.weeks[0].plan.name, "");
+
+        press(&mut a, ']');
+        let next = this + chrono::Days::new(7);
+        assert_eq!(a.board(), &Board::Week(next));
+        assert!(a.plan().is_empty());
+        press(&mut a, 'p');
+        a.handle_event(&ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter),
+        ));
+        let mondays: Vec<_> = a.store.weeks.iter().map(|w| w.monday).collect();
+        assert_eq!(mondays, [this, next]);
+        assert_eq!(a.plan().name, "Base");
+        assert!(render(&mut a, 180, 50).contains("· from \"Base\""));
+
+        press(&mut a, '[');
+        press(&mut a, '[');
+        assert_eq!(a.board(), &Board::Week(this - chrono::Days::new(7)));
+    }
+
+    fn workout(
+        id: &str,
+        exercise_type: &str,
+        date: NaiveDate,
+        start: &str,
+        minutes: u32,
+    ) -> Workout {
+        let start = Local
+            .from_local_datetime(&date.and_time(NaiveTime::parse_from_str(start, "%H:%M").unwrap()))
+            .unwrap();
+        Workout {
+            id: id.into(),
+            exercise_type: exercise_type.into(),
+            day: date,
+            start,
+            end: start + TimeDelta::minutes(minutes.into()),
+            minutes,
+            active_min: None,
+            kcal: None,
+            avg_hr: None,
+            distance_m: None,
+            elevation_m: None,
+            pace_s_per_km: None,
+            swim_lengths: None,
+            azm: None,
+            google_zones: None,
+            notes: None,
+            display_name: None,
+        }
+    }
+
+    /// Last week's Monday: a run at 07:00 done at 07:05, a commute ride at 08:30 and a missed
+    /// swim at 18:00. Returns the app and the run's and swim's ids.
+    fn last_week_app(dir: &std::path::Path) -> (App, String, String) {
+        let mut a = App::new(Paths::under(dir), Store::default(), Device::default());
+        let monday = week::this_monday() - Days::new(7);
+        a.set_board(Board::Week(monday));
+        let lib = a.store.library.clone();
+        let at = |ty: &str, hhmm: &str| Item {
+            start: NaiveTime::parse_from_str(hhmm, "%H:%M").unwrap(),
+            ..crate::library::new_item(&lib, ty).unwrap()
+        };
+        let (run, swim) = (at("run", "07:00"), at("swim", "18:00"));
+        let ids = (run.id.clone(), swim.id.clone());
+        a.plan_mut().days[0] = vec![run, swim];
+        a.actuals = Some((
+            monday,
+            WeekActuals {
+                fetched_at: Utc::now(),
+                workouts: vec![
+                    workout("ride", "CYCLING", monday, "08:30", 20),
+                    workout("run", "RUNNING", monday, "07:05", 40),
+                ],
+                heart_rate: vec![],
+            },
+        ));
+        a.day = 0;
+        (a, ids.0, ids.1)
+    }
+
+    #[test]
+    fn selection_indexes_the_visible_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut a, run, swim) = last_week_app(dir.path());
+        a.card = 1;
+        assert_eq!(week::selected_id(&a), Some(swim.clone()));
+
+        press(&mut a, 'c');
+        assert_eq!(
+            week::selected_id(&a),
+            None,
+            "the commute ride is card 1 now"
+        );
+        a.card = 0;
+        assert_eq!(week::selected_id(&a), Some(run));
+        a.card = 2;
+        assert_eq!(week::selected_id(&a), Some(swim));
+
+        let s = render(&mut a, 180, 50);
+        assert!(s.contains("✓ done"), "{s}");
+        assert!(s.contains("commute"), "{s}");
+        assert!(s.contains("load 0 (TRIMP)"), "{s}");
+
+        a.card = 1;
+        press(&mut a, 'e');
+        assert!(
+            matches!(a.modal, Modal::None),
+            "a commute has no session to edit"
+        );
+        a.card = 0;
+        a.handle_event(&ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter),
+        ));
+        assert!(matches!(a.modal, Modal::WorkoutDetails { .. }));
+    }
+
+    #[test]
+    fn m_links_the_session_to_the_chosen_workout() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut a, _, swim) = last_week_app(dir.path());
+        a.card = 1;
+        press(&mut a, 'm');
+        // Choices: the run, the ride, "none", then "auto", selected as the swim has no link.
+        press(&mut a, 'k');
+        press(&mut a, 'k');
+        a.handle_event(&ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter),
+        ));
+        let (d, i) = a.plan().find(&swim).unwrap();
+        assert_eq!(a.plan().days[d][i].workout.as_deref(), Some("ride"));
+        assert_eq!(week::selected_id(&a), Some(swim));
+        let (saved, _) = crate::storage::load(&a.paths).unwrap();
+        let monday = a.board_monday().unwrap();
+        let saved = &saved.week(monday).unwrap().plan.days[d][i];
+        assert_eq!(saved.workout.as_deref(), Some("ride"));
     }
 
     fn text(buf: &Buffer) -> String {

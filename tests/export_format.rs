@@ -4,36 +4,38 @@
 use chrono::NaiveDate;
 use csv::StringRecord;
 use icalendar::{Calendar, Component};
-use tapas::export::{ExportOpts, events, to_google_csv, to_ics};
-use tapas::library::new_item;
-use tapas::model::{Item, Plan, Store};
+use tapas::export::{ExportEvent, range_events, to_google_csv, to_ics, week_events};
+use tapas::library::{new_item, starter_plan};
+use tapas::model::{Item, Store};
 
-fn opts() -> ExportOpts {
-    ExportOpts {
-        first_monday: NaiveDate::from_ymd_opt(2026, 9, 28).unwrap(),
-        weeks: 1,
-        include_life: false,
-    }
+fn monday() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 9, 28).unwrap()
 }
 
-/// A single run item on Monday with notes containing a comma, a double quote and a newline,
-/// the three characters CSV and iCalendar need to escape.
-fn tricky_plan() -> (Store, Plan) {
-    let store = Store::default();
-    let mut plan = Plan::new("Tricky");
-    plan.days[0].push(Item {
+/// A day before every exported week, so all items are as planned.
+fn today() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()
+}
+
+fn events(store: &Store) -> Vec<ExportEvent> {
+    week_events(store, monday(), None, today(), false)
+}
+
+/// A week with a single run item on Monday with notes containing a comma, a double quote and
+/// a newline, the three characters CSV and iCalendar need to escape.
+fn tricky_store() -> Store {
+    let mut store = Store::default();
+    let run = Item {
         notes: "Hills, \"repeats\"\nBring gels".into(),
         ..new_item(&store.library, "run").unwrap()
-    });
-    (store, plan)
+    };
+    store.week_mut_or_insert(monday()).plan.days[0].push(run);
+    store
 }
 
 #[test]
 fn csv_notes_with_comma_quote_newline_round_trip() {
-    let (store, plan) = tricky_plan();
-    let opts = opts();
-    let ev = events(&store, &plan, &opts);
-    let csv = to_google_csv(&ev, opts.weeks).unwrap();
+    let csv = to_google_csv(&events(&tricky_store())).unwrap();
 
     let mut r = csv::Reader::from_reader(csv.as_bytes());
     let rows: Vec<StringRecord> = r.records().map(|x| x.unwrap()).collect();
@@ -46,10 +48,7 @@ fn csv_notes_with_comma_quote_newline_round_trip() {
 
 #[test]
 fn ics_notes_with_comma_quote_newline_round_trip() {
-    let (store, plan) = tricky_plan();
-    let opts = opts();
-    let ev = events(&store, &plan, &opts);
-    let ics = to_ics(&plan, &ev, 1);
+    let ics = to_ics("Training", &events(&tricky_store()));
     let cal: Calendar = ics.parse().unwrap();
     let parsed: Vec<_> = cal.events().collect();
     assert_eq!(parsed.len(), 1);
@@ -57,57 +56,55 @@ fn ics_notes_with_comma_quote_newline_round_trip() {
     assert!(desc.contains("Hills, \"repeats\"\nBring gels"));
 }
 
-/// The same item id always maps to the same ICS UID, across independent calls.
+/// The same item always maps to the same ICS UID, across independent calls.
 #[test]
 fn uid_is_stable_across_calls() {
-    let (store, plan) = tricky_plan();
-    let opts = opts();
-    let ev1 = events(&store, &plan, &opts);
-    let ev2 = events(&store, &plan, &opts);
-    let ics1 = to_ics(&plan, &ev1, 1);
-    let ics2 = to_ics(&plan, &ev2, 1);
+    let store = tricky_store();
     let uid = |ics: &str| -> String {
         let cal: Calendar = ics.parse().unwrap();
         cal.events().next().unwrap().get_uid().unwrap().to_string()
     };
-    let u1 = uid(&ics1);
-    let u2 = uid(&ics2);
+    let u1 = uid(&to_ics("Training", &events(&store)));
+    let u2 = uid(&to_ics("Training", &events(&store)));
     assert_eq!(u1, u2);
-    assert_eq!(u1, format!("{}@tapas", plan.days[0][0].id));
+    let id = &store.weeks[0].plan.days[0][0].id;
+    assert_eq!(u1, format!("{}-item-{id}@tapas", monday()));
 }
 
-/// RRULE with COUNT only appears when exporting more than one week.
+/// Applied weeks export one event per item and week, never a recurrence.
 #[test]
-fn rrule_count_only_when_weeks_gt_1() {
-    let (store, plan) = tricky_plan();
-    let one_week = to_ics(&plan, &events(&store, &plan, &opts()), 1);
-    assert!(!one_week.contains("RRULE"));
-
-    let four_weeks_opts = ExportOpts { weeks: 4, ..opts() };
-    let ev = events(&store, &plan, &four_weeks_opts);
-    let four_weeks = to_ics(&plan, &ev, 4);
-    let cal: Calendar = four_weeks.parse().unwrap();
-    let ev0 = cal.events().next().unwrap();
-    assert_eq!(ev0.property_value("RRULE"), Some("FREQ=WEEKLY;COUNT=4"));
+fn applied_weeks_export_single_events() {
+    let mut store = Store {
+        plans: vec![starter_plan("Base")],
+        ..Store::default()
+    };
+    let id = store.plans[0].id.clone();
+    assert!(store.apply_template(&id, monday(), 4));
+    let ev = range_events(&store, monday(), 4, |_| None, today(), false);
+    assert_eq!(ev.len(), 4 * 13);
+    let ics = to_ics("Training", &ev);
+    assert!(!ics.contains("RRULE"));
+    let cal: Calendar = ics.parse().unwrap();
+    assert_eq!(cal.events().count(), ev.len());
+    let csv = to_google_csv(&ev).unwrap();
+    assert_eq!(
+        csv::Reader::from_reader(csv.as_bytes()).records().count(),
+        ev.len()
+    );
 }
 
-/// All-day markers get an exclusive-end DTEND of the next day; timed events crossing
-/// midnight land on the following calendar date.
+/// All-day markers get an exclusive-end DTEND of the next day.
 #[test]
 fn all_day_dtend_is_exclusive_next_day() {
-    let store = Store::default();
-    let mut plan = Plan::new("R");
-    plan.days[0].push(new_item(&store.library, "rest").unwrap()); // "off", dur 0
-    let opts = opts();
-    let ev = events(&store, &plan, &opts);
-    let ics = to_ics(&plan, &ev, 1);
+    let mut store = Store::default();
+    let rest = new_item(&store.library, "rest").unwrap(); // "off", dur 0
+    store.week_mut_or_insert(monday()).plan.days[0].push(rest);
+    let ics = to_ics("Training", &events(&store));
     let cal: Calendar = ics.parse().unwrap();
     let e = cal.events().next().unwrap();
     assert_eq!(
         e.get_start(),
-        Some(icalendar::DatePerhapsTime::Date(
-            NaiveDate::from_ymd_opt(2026, 9, 28).unwrap()
-        ))
+        Some(icalendar::DatePerhapsTime::Date(monday()))
     );
     assert_eq!(
         e.get_end(),

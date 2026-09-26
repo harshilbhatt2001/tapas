@@ -300,7 +300,9 @@ async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<
         }
         HealthCommand::Week { start, all } => {
             let monday = week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
-            let workouts = services::week_workouts(paths, monday, Prompt::Browser).await?;
+            let workouts = services::fetch_week_actuals(paths, monday, Prompt::Browser)
+                .await?
+                .workouts;
             let plan = store
                 .week(monday)
                 .map_or_else(|| Week::new(monday).plan, |w| w.plan.clone());

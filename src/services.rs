@@ -14,6 +14,7 @@ use crate::{
         drive::{Drive, RemoteMeta},
         health::{self, Workout},
     },
+    health_cache::{self, WeekActuals},
     model::{Device, Kind, Library, Plan, Store, hm},
     storage::Paths,
     sync::{self, Drift, Report, merge::Side},
@@ -116,7 +117,7 @@ pub fn planned_vs_done(
         out[d].planned_min = train.map(|x| x.dur).sum();
     }
     for w in workouts {
-        let day = (w.start.date_naive() - monday).num_days();
+        let day = (w.day - monday).num_days();
         if let Ok(d @ 0..7) = usize::try_from(day) {
             let list = if is_commute(w, weight_kg) {
                 &mut out[d].commutes
@@ -211,15 +212,25 @@ pub async fn latest_weight(paths: &Paths, prompt: Prompt) -> Result<Option<(f64,
     health::latest_weight_kg(&token, 90).await
 }
 
-/// Google Health workouts of the week starting `monday`.
-pub async fn week_workouts(
+/// Google Health workouts of the week starting `monday` and the heart rate during them, saved
+/// to the week's cache.
+pub async fn fetch_week_actuals(
     paths: &Paths,
     monday: NaiveDate,
     prompt: Prompt,
-) -> Result<Vec<Workout>> {
+) -> Result<WeekActuals> {
     let auth = authenticator(paths, Api::Health, prompt).await?;
     let token = auth::access_token(&auth, Api::Health.scopes()).await?;
-    health::workouts(&token, monday, monday + Days::new(6)).await
+    let workouts = health::workouts(&token, monday, monday + Days::new(6)).await?;
+    let (from, to) = health_cache::week_span(monday);
+    let samples = health::heart_rate(&token, from.to_utc(), to.to_utc()).await?;
+    let actuals = WeekActuals {
+        fetched_at: Utc::now(),
+        heart_rate: health_cache::samples_in_workouts(samples, &workouts),
+        workouts,
+    };
+    health_cache::save(paths, monday, &actuals)?;
+    Ok(actuals)
 }
 
 /// Why a Drive sync did not happen.
@@ -343,11 +354,25 @@ mod tests {
     use crate::library::default_library;
 
     fn ride(ty: &str, day: u32, minutes: u32, kcal: Option<f64>) -> Workout {
+        let start = Local.with_ymd_and_hms(2026, 9, day, 12, 0, 0).unwrap();
         Workout {
+            id: format!("{ty}-{day}-{minutes}"),
             exercise_type: ty.into(),
-            start: Local.with_ymd_and_hms(2026, 9, day, 12, 0, 0).unwrap(),
+            day: start.date_naive(),
+            start,
+            end: start + chrono::Duration::minutes(minutes.into()),
             minutes,
+            active_min: None,
             kcal,
+            avg_hr: None,
+            distance_m: None,
+            elevation_m: None,
+            pace_s_per_km: None,
+            swim_lengths: None,
+            azm: None,
+            google_zones: None,
+            notes: None,
+            display_name: None,
         }
     }
 

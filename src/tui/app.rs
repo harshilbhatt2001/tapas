@@ -1,7 +1,11 @@
 //! App state, event dispatch and background-task plumbing.
 
 use std::{
-    collections::BTreeSet, future::Future, path::PathBuf, sync::mpsc::Sender, time::Instant,
+    collections::{BTreeSet, HashSet},
+    future::Future,
+    path::PathBuf,
+    sync::mpsc::Sender,
+    time::Instant,
 };
 
 use anyhow::Result;
@@ -15,7 +19,8 @@ use ratatui::{
 use super::{editor, export, library, plans, profile, sync, week, widgets::Form};
 use crate::{
     export as ex,
-    google::{calendar::PushReport, health::Workout},
+    google::calendar::PushReport,
+    health_cache::{self, WeekActuals},
     model::{Device, Plan, Store, Week},
     services::{self, SyncError},
     storage::{self, Paths},
@@ -135,7 +140,7 @@ impl Task {
         match self {
             Task::Push => "Pushing to Google Calendar",
             Task::Weight => "Fetching weight from Google Health",
-            Task::Workouts => "Fetching workouts from Google Health",
+            Task::Workouts => "Fetching the week from Google Health",
             Task::Sync => "Syncing with Google Drive",
         }
     }
@@ -149,7 +154,7 @@ pub enum BgResult {
     Weight(Result<Option<(f64, DateTime<Utc>)>>),
     Workouts {
         monday: NaiveDate,
-        res: Result<Vec<Workout>>,
+        res: Result<WeekActuals>,
     },
     /// `sent` is the store the sync started from, `store` what it left on disk.
     Synced {
@@ -205,6 +210,15 @@ pub enum SyncStatus {
     Error,
 }
 
+/// Google Health week fetches: one runs at a time and only the latest request waits.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActualsFetch {
+    pub running: Option<NaiveDate>,
+    pub queued: Option<NaiveDate>,
+    /// Weeks fetched this session; the automatic fetch skips them.
+    pub started: HashSet<NaiveDate>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LibFocus {
     #[default]
@@ -230,8 +244,9 @@ pub struct App {
     pub lib_focus: LibFocus,
     pub first_monday: NaiveDate,
     pub last_file: Option<PathBuf>,
-    /// Workouts fetched from Google Health for the week starting at the date.
-    pub done: Option<(NaiveDate, Vec<Workout>)>,
+    /// The Google Health cache of the dated week last opened on the board.
+    pub actuals: Option<(NaiveDate, WeekActuals)>,
+    pub actuals_fetch: ActualsFetch,
     /// Show commute rides next to the Done line (off by default; `c` on the week screen).
     pub show_commutes: bool,
     pub status: Status,
@@ -270,7 +285,8 @@ impl App {
             lib_focus: LibFocus::Types,
             first_monday: ex::next_monday(Local::now().date_naive()),
             last_file: None,
-            done: None,
+            actuals: None,
+            actuals_fetch: ActualsFetch::default(),
             show_commutes: false,
             status: Status {
                 text: "Loaded. Press ? for keys.".into(),
@@ -293,12 +309,25 @@ impl App {
         &self.board
     }
 
+    /// Show `board`; a dated week brings its Google Health cache and fetches it when stale.
     pub fn set_board(&mut self, board: Board) {
         if let Board::Week(monday) = board {
             self.unstored_week = Week::new(monday).plan;
+            self.actuals = health_cache::load(&self.paths, monday).map(|a| (monday, a));
+            week::auto_fetch_actuals(self, monday);
         }
         self.board = board;
         self.clamp();
+    }
+
+    /// The Google Health cache of the week on the board.
+    #[must_use]
+    pub fn board_actuals(&self) -> Option<&WeekActuals> {
+        let monday = self.board_monday()?;
+        self.actuals
+            .as_ref()
+            .filter(|(m, _)| *m == monday)
+            .map(|(_, a)| a)
     }
 
     /// Monday of the dated week on the board; `None` for a template.
@@ -428,7 +457,7 @@ impl App {
         match res {
             BgResult::Pushed { plan_id, res } => export::on_pushed(self, &plan_id, res),
             BgResult::Weight(res) => profile::on_weight(self, res),
-            BgResult::Workouts { monday, res } => export::on_workouts(self, monday, res),
+            BgResult::Workouts { monday, res } => week::on_actuals(self, monday, res),
             BgResult::Synced {
                 manual,
                 sent,

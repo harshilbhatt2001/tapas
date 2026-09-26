@@ -53,6 +53,7 @@ pub fn run(paths: Paths, store: Store, device: Device) -> Result<()> {
         handle: rt.handle().clone(),
         tx,
     });
+    app.set_board(app.board().clone());
     sync::start(&mut app, false);
 
     // Chained under ratatui's own hook, which restores the terminal first.
@@ -239,6 +240,7 @@ fn help(screen: Screen) -> Text<'static> {
             ("< >", "move session to previous / next day"),
             ("S", "load the starter week"),
             ("X", "clear the week"),
+            ("r", "fetch this week from Google Health again"),
             ("c", "show / hide commute rides from Google Health"),
             ("click", "select a session or day"),
         ],
@@ -268,7 +270,6 @@ fn help(screen: Screen) -> Text<'static> {
             ("i", "write .ics to Downloads"),
             ("c", "write Google CSV to Downloads"),
             ("g", "push plan to Google Calendar"),
-            ("f", "fetch this week's workouts"),
             ("s", "sync with Google Drive now"),
         ],
     };

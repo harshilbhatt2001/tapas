@@ -126,11 +126,25 @@ pub fn workouts_year() -> Vec<Workout> {
                 .from_local_datetime(&date.and_hms_opt(7, 0, 0).expect("valid time"))
                 .earliest()
                 .expect("7:00 exists every day");
+            let minutes = 30 + d % 90;
             Workout {
+                id: format!("bench-{d}"),
                 exercise_type: TYPES[d as usize % TYPES.len()].into(),
+                day: date,
                 start,
-                minutes: 30 + d % 90,
+                end: start + chrono::Duration::minutes(minutes.into()),
+                minutes,
+                active_min: Some(minutes),
                 kcal: Some(f64::from(300 + d % 400)),
+                avg_hr: Some(140),
+                distance_m: None,
+                elevation_m: None,
+                pace_s_per_km: None,
+                swim_lengths: None,
+                azm: None,
+                google_zones: None,
+                notes: None,
+                display_name: None,
             }
         })
         .collect()

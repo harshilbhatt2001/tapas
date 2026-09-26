@@ -3,6 +3,7 @@
 pub mod calc;
 pub mod export;
 pub mod google;
+pub mod health_cache;
 pub mod library;
 pub mod model;
 pub mod services;

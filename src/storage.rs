@@ -87,6 +87,12 @@ impl Paths {
     pub fn sync_dir(&self) -> PathBuf {
         self.data_dir.join("sync")
     }
+
+    /// Google Health cache, one `<monday>.json` per week; never synced.
+    #[must_use]
+    pub fn health_dir(&self) -> PathBuf {
+        self.data_dir.join("health")
+    }
 }
 
 /// Write to a temporary file next to `path`, then rename it over the old one, so readers and

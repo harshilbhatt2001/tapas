@@ -187,6 +187,25 @@ pub fn week_events(
     out
 }
 
+/// Whether the actuals going from `before` to `after` change the events of the week of
+/// `monday` dated before `today`.
+#[must_use]
+pub fn past_events_changed(
+    store: &Store,
+    monday: NaiveDate,
+    before: Option<&WeekActuals>,
+    after: &WeekActuals,
+    today: NaiveDate,
+    include_life: bool,
+) -> bool {
+    let past = |actuals| {
+        let mut events = week_events(store, monday, actuals, today, include_life);
+        events.retain(|e| e.date < today);
+        events
+    };
+    past(before) != past(Some(after))
+}
+
 /// [`week_events`] of `weeks` consecutive weeks from the week containing `from`, each with the
 /// actuals `actuals_of` gives for its Monday.
 #[must_use]
@@ -419,6 +438,32 @@ mod tests {
         assert!(!later.is_empty());
         assert!(later.iter().all(|e| !e.summary.starts_with(['✓', '✗'])));
         assert_eq!(ev.len(), 15);
+    }
+
+    #[test]
+    fn only_past_day_changes_count() {
+        let store = store();
+        let monday = day(MONDAY);
+        let today = day(MONDAY + 2);
+        let changed = |before: &WeekActuals, after: &WeekActuals| {
+            past_events_changed(&store, monday, Some(before), after, today, false)
+        };
+        let run = workout("RUNNING", at(monday, 19, 10), 30);
+        let old = actuals(vec![]);
+        let new = actuals(vec![run.clone()]);
+        assert!(changed(&old, &new));
+        assert!(!changed(&new, &new));
+        let refetched = WeekActuals {
+            fetched_at: DateTime::UNIX_EPOCH + TimeDelta::hours(1),
+            ..new.clone()
+        };
+        assert!(!changed(&new, &refetched));
+        let today_ride = workout("BIKING", at(today, 7, 0), 45);
+        let later = workout("RUNNING", at(day(MONDAY + 4), 7, 0), 45);
+        assert!(!changed(&new, &actuals(vec![run, today_ride, later])));
+        assert!(past_events_changed(
+            &store, monday, None, &old, today, false
+        ));
     }
 
     #[test]

@@ -136,10 +136,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Span::raw(" tapas").bold(),
                 Span::styled("  training week planner", Style::new().fg(DIM)),
             ]),
-            Line::from(vec![
-                Span::raw(" "),
-                Span::raw(week::board_title(app)).bold(),
-            ]),
             {
                 let mut l = export::google_state(app);
                 l.spans.insert(0, Span::raw(" "));

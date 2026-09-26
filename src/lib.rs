@@ -9,3 +9,4 @@ pub mod services;
 pub mod storage;
 pub mod sync;
 pub mod tui;
+pub mod zones;

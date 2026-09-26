@@ -163,8 +163,10 @@ pub enum BgResult {
         res: Result<PushReport>,
     },
     Weight(Result<Option<(f64, DateTime<Utc>)>>),
+    /// `before` is the week's cache as it was when the fetch started.
     Workouts {
         monday: NaiveDate,
+        before: Option<WeekActuals>,
         res: Result<WeekActuals>,
     },
     /// `sent` is the store the sync started from, `store` what it left on disk.
@@ -258,6 +260,8 @@ pub struct App {
     /// The Google Health cache of the dated week last opened on the board.
     pub actuals: Option<(NaiveDate, WeekActuals)>,
     pub actuals_fetch: ActualsFetch,
+    /// Mondays of weeks to push quietly once the running push is done.
+    pub pending_pushes: BTreeSet<NaiveDate>,
     /// Show commute rides on the board (off by default; `c` on the week screen).
     pub show_commutes: bool,
     pub status: Status,
@@ -298,6 +302,7 @@ impl App {
             last_file: None,
             actuals: None,
             actuals_fetch: ActualsFetch::default(),
+            pending_pushes: BTreeSet::new(),
             show_commutes: false,
             status: Status {
                 text: "Loaded. Press ? for keys.".into(),
@@ -409,9 +414,8 @@ impl App {
     /// Keep selections inside their lists.
     pub fn clamp(&mut self) {
         if matches!(self.board, Board::Template(_)) && self.board_template().is_none() {
-            let monday = week::this_monday();
-            self.board = Board::Week(monday);
-            self.unstored_week = Week::new(monday).plan;
+            self.set_board(Board::Week(week::this_monday()));
+            return;
         }
         self.day = self.day.min(6);
         let n = week::day_slots(self, self.day).len();
@@ -468,7 +472,11 @@ impl App {
         match res {
             BgResult::Pushed { quiet, res } => export::on_pushed(self, quiet, res),
             BgResult::Weight(res) => profile::on_weight(self, res),
-            BgResult::Workouts { monday, res } => week::on_actuals(self, monday, res),
+            BgResult::Workouts {
+                monday,
+                before,
+                res,
+            } => week::on_actuals(self, monday, before.as_ref(), res),
             BgResult::Synced {
                 manual,
                 sent,

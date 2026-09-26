@@ -21,7 +21,7 @@ use super::{
 use crate::{
     export,
     google::{auth::Api, calendar::PushReport},
-    health_cache,
+    health_cache::{self, WeekActuals},
     model::{DAY_FMT, week_monday},
     services::{self, Prompt},
 };
@@ -140,6 +140,35 @@ pub fn start_push_weeks(app: &mut App, from: NaiveDate, weeks: u32, quiet: bool)
     });
 }
 
+/// Push the week of `monday` quietly when auto-push is on, Calendar is logged in and the
+/// fetched actuals `after` change its past days from `before`; after the running push if any.
+pub fn push_if_past_changed(
+    app: &mut App,
+    monday: NaiveDate,
+    before: Option<&WeekActuals>,
+    after: &WeekActuals,
+) {
+    let s = &app.store.export;
+    if !s.auto_push_actuals
+        || !services::is_logged_in(&app.paths, Api::Calendar)
+        || !export::past_events_changed(
+            &app.store,
+            monday,
+            before,
+            after,
+            Local::now().date_naive(),
+            s.include_life,
+        )
+    {
+        return;
+    }
+    if app.busy.contains(&Task::Push) {
+        app.pending_pushes.insert(monday);
+    } else {
+        start_push_weeks(app, monday, 1, true);
+    }
+}
+
 pub fn on_pushed(app: &mut App, quiet: bool, res: Result<PushReport>) {
     match res {
         Ok(r) => {
@@ -155,6 +184,9 @@ pub fn on_pushed(app: &mut App, quiet: bool, res: Result<PushReport>) {
             }
         }
         Err(e) => app.error(format!("Push: {e:#}")),
+    }
+    if let Some(monday) = app.pending_pushes.pop_first() {
+        start_push_weeks(app, monday, 1, true);
     }
 }
 

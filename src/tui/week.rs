@@ -40,7 +40,7 @@ pub fn this_monday() -> NaiveDate {
 
 /// `Week of Mon 21 Sep 2026 · from "Build 2"`, or `Template: Build 2`.
 #[must_use]
-pub fn board_title(app: &App) -> String {
+fn board_title(app: &App) -> String {
     let name = &app.plan().name;
     match app.board_monday() {
         Some(monday) => week_title(monday, name),
@@ -98,8 +98,13 @@ fn request_actuals(app: &mut App, monday: NaiveDate) {
 fn start_actuals_fetch(app: &mut App, monday: NaiveDate) {
     let paths = app.paths.clone();
     app.spawn(Task::Workouts, async move {
+        let before = health_cache::load(&paths, monday);
         let res = services::fetch_week_actuals(&paths, monday, Prompt::Never).await;
-        BgResult::Workouts { monday, res }
+        BgResult::Workouts {
+            monday,
+            before,
+            res,
+        }
     });
     if app.busy.contains(&Task::Workouts) {
         app.actuals_fetch.running = Some(monday);
@@ -120,10 +125,18 @@ fn refetch_actuals(app: &mut App) {
     request_actuals(app, monday);
 }
 
-/// A finished fetch is already in the cache; show it when its week is on the board, then
-/// start the week waiting.
-pub fn on_actuals(app: &mut App, monday: NaiveDate, res: anyhow::Result<WeekActuals>) {
+/// A finished fetch is already in the cache; show it when its week is on the board, push the
+/// week when its past days changed from `before`, then start the week waiting.
+pub fn on_actuals(
+    app: &mut App,
+    monday: NaiveDate,
+    before: Option<&WeekActuals>,
+    res: anyhow::Result<WeekActuals>,
+) {
     app.actuals_fetch.running = None;
+    if let Ok(after) = &res {
+        super::export::push_if_past_changed(app, monday, before, after);
+    }
     match res {
         Ok(actuals) if app.board_monday() == Some(monday) => {
             let weight = app.store.profile.weight;

@@ -201,6 +201,7 @@ pub fn new_item(lib: &Library, type_key: &str) -> Option<Item> {
         start: t.start,
         dur: e.dur,
         notes: String::new(),
+        workout: None,
         updated_at: DateTime::UNIX_EPOCH,
     })
 }
@@ -215,6 +216,7 @@ pub fn starter_days() -> [Vec<Item>; 7] {
         start,
         dur,
         notes: notes.into(),
+        workout: None,
         updated_at: DateTime::UNIX_EPOCH,
     };
     let wfh = || mk("work", "home", t(9, 0), 480, "");

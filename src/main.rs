@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use chrono::{Local, NaiveDate};
+use chrono::{Days, Local, NaiveDate};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
 use google_calendar3::yup_oauth2::read_application_secret;
@@ -9,7 +9,10 @@ use tapas::{
     calc,
     export::{self, ExportOpts},
     google::auth,
-    model::{DAYS, Device, Plan, STORE_VERSION, Store, hm},
+    model::{
+        DAY_FMT, DAYS, Device, Plan, STORE_VERSION, Store, TIME_FMT, Week, hm, week_monday,
+        week_title,
+    },
     services::{self, Prompt},
     storage::{self, Paths},
     sync::{self, Drift, Outcome, merge::Side},
@@ -25,10 +28,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Export a plan as iCalendar or Google Calendar CSV.
+    /// Export a template as iCalendar or Google Calendar CSV.
     Export {
         format: Format,
-        /// Plan name or id; the active plan by default.
+        /// Template name or id; the first template by default.
         #[arg(long, add = ArgValueCandidates::new(plan_names))]
         plan: Option<String>,
         /// Monday of the first week (YYYY-MM-DD); next Monday by default.
@@ -44,8 +47,29 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// List plans.
+    /// List templates.
     Plans,
+    /// Copy a template's sessions into consecutive dated weeks.
+    Apply {
+        /// Template name or id.
+        #[arg(add = ArgValueCandidates::new(plan_names))]
+        template: String,
+        /// Any day of the first week (YYYY-MM-DD); next Monday by default.
+        #[arg(long)]
+        from: Option<NaiveDate>,
+        /// Number of weeks, 1 to 52.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=52))]
+        weeks: u32,
+        /// Replace the sessions of weeks that already have some.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Print the dated week containing a date.
+    Week {
+        /// Any day of the week (YYYY-MM-DD); today by default.
+        #[arg(long)]
+        date: Option<NaiveDate>,
+    },
     /// Google account setup and Calendar push.
     Google {
         #[command(subcommand)]
@@ -92,9 +116,9 @@ enum GoogleCommand {
         #[arg(long, value_parser = ["calendar", "health"])]
         only: Option<String>,
     },
-    /// Replace a plan's events in the tapas Google calendar.
+    /// Replace a template's events in the tapas Google calendar.
     Push {
-        /// Plan name or id; the active plan by default.
+        /// Template name or id; the first template by default.
         #[arg(long, add = ArgValueCandidates::new(plan_names))]
         plan: Option<String>,
         /// Monday of the first week (YYYY-MM-DD); next Monday by default.
@@ -114,7 +138,7 @@ enum HealthCommand {
         #[arg(long)]
         apply: bool,
     },
-    /// Planned training next to recorded workouts, per day.
+    /// A dated week's planned training next to recorded workouts, per day.
     Week {
         /// Any day of the week (YYYY-MM-DD); this week by default.
         #[arg(long)]
@@ -141,7 +165,16 @@ fn main() -> Result<()> {
     let (mut store, device) = storage::load(&paths)?;
     match cli.command {
         None => tapas::tui::run(paths, store, device)?,
-        Some(Command::Plans) => list_plans(&store, &device),
+        Some(Command::Plans) => list_plans(&store),
+        Some(Command::Apply {
+            template,
+            from,
+            weeks,
+            replace,
+        }) => apply(&paths, &mut store, &template, from, weeks, replace)?,
+        Some(Command::Week { date }) => {
+            print_week(&store, date.unwrap_or_else(|| Local::now().date_naive()));
+        }
         Some(Command::Export {
             format,
             plan,
@@ -150,7 +183,7 @@ fn main() -> Result<()> {
             life,
             output,
         }) => {
-            let plan = pick_plan(&store, &device, plan.as_deref())?;
+            let plan = pick_plan(&store, plan.as_deref())?;
             let opts = ExportOpts {
                 first_monday: start
                     .unwrap_or_else(|| export::next_monday(Local::now().date_naive())),
@@ -175,7 +208,7 @@ fn main() -> Result<()> {
         }
         Some(Command::Google { .. }) => unreachable!("handled before loading the store"),
         Some(Command::Health { command }) => {
-            runtime()?.block_on(health(command, &paths, &mut store, &device))?;
+            runtime()?.block_on(health(command, &paths, &mut store))?;
         }
         Some(Command::Sync { command, keep }) => {
             let rt = runtime()?;
@@ -227,9 +260,9 @@ async fn google(cmd: GoogleCommand, paths: &Paths) -> Result<()> {
             }
         }
         GoogleCommand::Push { plan, start, weeks } => {
-            let (mut store, device) = storage::load(paths)?;
+            let (mut store, _) = storage::load(paths)?;
             let store = &mut store;
-            let plan = pick_plan(store, &device, plan.as_deref())?.clone();
+            let plan = pick_plan(store, plan.as_deref())?.clone();
             let opts = ExportOpts {
                 first_monday: start
                     .unwrap_or_else(|| export::next_monday(Local::now().date_naive())),
@@ -248,12 +281,7 @@ async fn google(cmd: GoogleCommand, paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-async fn health(
-    cmd: HealthCommand,
-    paths: &Paths,
-    store: &mut Store,
-    device: &Device,
-) -> Result<()> {
+async fn health(cmd: HealthCommand, paths: &Paths, store: &mut Store) -> Result<()> {
     match cmd {
         HealthCommand::Weight { apply } => {
             let Some((kg, at)) = services::latest_weight(paths, Prompt::Browser).await? else {
@@ -271,17 +299,19 @@ async fn health(
             }
         }
         HealthCommand::Week { start, all } => {
-            let monday = services::week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
+            let monday = week_monday(start.unwrap_or_else(|| Local::now().date_naive()));
             let workouts = services::week_workouts(paths, monday, Prompt::Browser).await?;
-            let plan = store.plan_or_first(device.active_plan.as_deref());
+            let plan = store
+                .week(monday)
+                .map_or_else(|| Week::new(monday).plan, |w| w.plan.clone());
             let days = services::planned_vs_done(
                 &store.library,
-                plan,
+                &plan,
                 monday,
                 &workouts,
                 store.profile.weight,
             );
-            println!("{} vs Google Health, week of {monday}", plan.name);
+            println!("{} vs Google Health", week_title(monday, &plan.name));
             let mut hidden = 0;
             for (d, day) in days.iter().enumerate() {
                 let mut what = services::workouts_text(&day.done);
@@ -411,21 +441,83 @@ fn plan_names() -> Vec<CompletionCandidate> {
         .collect()
 }
 
-/// The named plan, or the active one.
-fn pick_plan<'a>(store: &'a Store, device: &Device, name: Option<&str>) -> Result<&'a Plan> {
+/// The named template, or the first one.
+fn pick_plan<'a>(store: &'a Store, name: Option<&str>) -> Result<&'a Plan> {
     match name {
         Some(n) => store
             .plan_by_name(n)
-            .with_context(|| format!("no plan named {n:?}")),
-        None => Ok(store.plan_or_first(device.active_plan.as_deref())),
+            .with_context(|| format!("no template named {n:?}")),
+        None => Ok(&store.plans[0]),
     }
 }
 
-fn list_plans(store: &Store, device: &Device) {
-    let active = &store.plan_or_first(device.active_plan.as_deref()).id;
+fn list_plans(store: &Store) {
     for p in &store.plans {
         let hours = calc::summary(&store.library, p).hours;
-        let mark = if &p.id == active { "*" } else { " " };
-        println!("{mark} {:<24} {hours:>5} h", p.name);
+        println!("{:<24} {hours:>5} h", p.name);
+    }
+}
+
+/// `tapas apply`: refuses to replace sessions without `replace`.
+fn apply(
+    paths: &Paths,
+    store: &mut Store,
+    template: &str,
+    from: Option<NaiveDate>,
+    weeks: u32,
+    replace: bool,
+) -> Result<()> {
+    let (id, name) = {
+        let t = pick_plan(store, Some(template))?;
+        (t.id.clone(), t.name.clone())
+    };
+    let from = week_monday(from.unwrap_or_else(|| export::next_monday(Local::now().date_naive())));
+    let filled = store.filled_weeks(from, weeks);
+    if !filled.is_empty() && !replace {
+        let dates: Vec<String> = filled
+            .iter()
+            .map(|m| m.format(DAY_FMT).to_string())
+            .collect();
+        bail!(
+            "these weeks already have sessions: {}; --replace overwrites them",
+            dates.join(", ")
+        );
+    }
+    if !store.apply_template(&id, from, weeks) {
+        bail!("no template with id {id}");
+    }
+    storage::save(paths, store)?;
+    let count = if weeks == 1 { "week" } else { "weeks" };
+    println!(
+        "Applied {name} to {weeks} {count} from {}",
+        from.format(DAY_FMT)
+    );
+    Ok(())
+}
+
+/// `tapas week`: the stored week containing `date`, day by day.
+fn print_week(store: &Store, date: NaiveDate) {
+    let monday = week_monday(date);
+    let Some(week) = store.week(monday) else {
+        println!("{}", week_title(monday, ""));
+        println!("empty");
+        return;
+    };
+    println!("{}", week_title(monday, &week.plan.name));
+    for d in 0..7 {
+        println!("{}", (monday + Days::new(d as u64)).format("%a %-d"));
+        for it in week.plan.sorted_day(d) {
+            let title = store.library.title(it);
+            if it.dur == 0 {
+                println!("  all day      {title}");
+            } else {
+                println!(
+                    "  {}–{} {title} ({})",
+                    it.start.format(TIME_FMT),
+                    it.end().format(TIME_FMT),
+                    hm(it.dur.into())
+                );
+            }
+        }
     }
 }

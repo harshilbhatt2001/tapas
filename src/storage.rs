@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(s.plans.len(), 1);
         assert_eq!(s.plans[0].name, "Week 1");
         assert!(s.plans[0].is_empty());
-        assert_eq!(device.active_plan, None);
+        assert!(s.weeks.is_empty());
         assert_eq!(load(&paths).unwrap().1, device);
     }
 

@@ -139,7 +139,9 @@ machine at a time, and merge or delete such copies by hand.
 ```
 tapas                                   # TUI
 tapas export ics|csv [--plan N] [--start YYYY-MM-DD] [--weeks N] [--life] [-o FILE]
-tapas plans                             # list
+tapas plans                             # list templates
+tapas apply <template> [--from D] [--weeks N] [--replace]  # copy into dated weeks
+tapas week [--date D]                   # print the dated week containing D
 tapas google setup <client_secret.json> # copy OAuth client into config dir
 tapas google login                      # browser consent, caches tokens
 tapas google push [--plan N] [--start D] [--weeks N]

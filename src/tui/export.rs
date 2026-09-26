@@ -21,6 +21,7 @@ use super::{
 use crate::{
     export::{self, ExportOpts},
     google::{auth::Api, calendar::PushReport, health::Workout},
+    model::week_monday,
     services::{self, Prompt},
 };
 
@@ -143,8 +144,7 @@ pub fn on_pushed(app: &mut App, plan_id: &str, res: Result<PushReport>) {
         Ok(r) => {
             let name = app
                 .store
-                .plans
-                .iter()
+                .every_plan()
                 .find(|p| p.id == plan_id)
                 .map_or("plan", |p| p.name.as_str())
                 .to_owned();
@@ -164,7 +164,7 @@ fn fetch_workouts(app: &mut App) {
         app.error(format!("{e:#}"));
         return;
     }
-    let monday = services::week_monday(Local::now().date_naive());
+    let monday = week_monday(Local::now().date_naive());
     let paths = app.paths.clone();
     app.spawn(Task::Workouts, async move {
         let res = services::week_workouts(&paths, monday, Prompt::Never).await;

@@ -3,7 +3,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Days, NaiveDate, Utc, Weekday};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 
 use crate::{
     calc,
@@ -58,12 +58,6 @@ pub fn workouts_text(workouts: &[Workout]) -> String {
         .map(|w| format!("{} {}", workout_label(w), hm(w.minutes.into())))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Monday of the week containing `d`.
-#[must_use]
-pub fn week_monday(d: NaiveDate) -> NaiveDate {
-    d.week(Weekday::Mon).first_day()
 }
 
 /// Bike rides shorter than this are commutes, not training.

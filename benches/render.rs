@@ -11,7 +11,7 @@ use ratatui::{
 use tapas::{
     model::{Device, Library, Plan, Store},
     storage::Paths,
-    tui::{App, draw},
+    tui::{App, Board, draw},
 };
 use tempfile::TempDir;
 
@@ -23,11 +23,14 @@ const SIZES: [(u16, u16); 2] = [(200, 60), (120, 40)];
 /// Screen names in tab order; tab `n` is selected with key `'1' + n`.
 const SCREENS: [&str; 5] = ["week", "plans", "library", "profile", "export"];
 
-/// A deterministic app: fixed Monday, first day selected, paths under a throwaway dir so a
-/// stray save could never touch the real store. The `TempDir` must outlive the app.
+/// A deterministic app: the first template on the board, fixed Monday, first day selected,
+/// paths under a throwaway dir so a stray save could never touch the real store. The
+/// `TempDir` must outlive the app.
 fn app(store: Store) -> (TempDir, App) {
     let dir = tempfile::tempdir().expect("tempdir");
+    let template = store.plans[0].id.clone();
     let mut app = App::new(Paths::under(dir.path()), store, Device::default());
+    app.set_board(Board::Template(template));
     app.first_monday = common::monday();
     app.day = 0;
     app.card = 0;

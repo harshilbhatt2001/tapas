@@ -29,7 +29,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Tabs},
 };
 
-pub use app::App;
+pub use app::{App, Board};
 use app::{Background, Modal, Screen};
 use widgets::{DIM, LINE, WARN, message_popup};
 
@@ -136,12 +136,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("  training week planner", Style::new().fg(DIM)),
             ]),
             Line::from(vec![
-                Span::styled(" plan ", Style::new().fg(DIM)),
-                Span::raw(plan.name.clone()).bold(),
-                Span::styled(
-                    format!("  ({} of {})", app.active() + 1, app.store.plans.len()),
-                    Style::new().fg(DIM),
-                ),
+                Span::raw(" "),
+                Span::raw(week::board_title(app)).bold(),
             ]),
             {
                 let mut l = export::google_state(app);
@@ -212,9 +208,9 @@ fn draw_modal(f: &mut Frame, app: &mut App) {
             message_popup(f, "Confirm", body, WARN);
             app.modal = Modal::Confirm { msg, action };
         }
-        Modal::AddPicker(mut state) => {
-            week::draw_picker(f, app, &mut state);
-            app.modal = Modal::AddPicker(state);
+        Modal::Picker(picker, mut state) => {
+            week::draw_picker(f, app, picker, &mut state);
+            app.modal = Modal::Picker(picker, state);
         }
         Modal::Form(form, kind) => {
             match &kind {
@@ -232,6 +228,10 @@ fn help(screen: Screen) -> Text<'static> {
         Screen::Week => &[
             ("h/l ←/→", "previous / next day"),
             ("j/k ↓/↑", "next / previous session"),
+            ("[ ]", "previous / next week"),
+            ("t", "this week"),
+            ("g", "go to the week of a date"),
+            ("p", "apply a template to this week"),
             ("a", "add a session to the day"),
             ("Enter e", "edit session"),
             ("y", "duplicate session"),
@@ -243,12 +243,13 @@ fn help(screen: Screen) -> Text<'static> {
             ("click", "select a session or day"),
         ],
         Screen::Plans => &[
-            ("j/k", "select plan"),
-            ("Enter", "make active"),
-            ("n", "new empty plan"),
-            ("c", "copy plan"),
-            ("r", "rename plan"),
-            ("d", "delete plan"),
+            ("j/k", "select template"),
+            ("Enter", "edit on the board"),
+            ("A", "apply to a range of weeks"),
+            ("n", "new empty template"),
+            ("c", "copy template"),
+            ("r", "rename template"),
+            ("d", "delete template"),
         ],
         Screen::Library => &[
             ("h/l Tab", "types / efforts pane"),
@@ -302,11 +303,54 @@ mod tests {
             plans: vec![starter_plan("Base")],
             ..Store::default()
         };
-        App::new(
+        let id = store.plans[0].id.clone();
+        let mut a = App::new(
             Paths::under(std::path::Path::new("/nonexistent/tapas")),
             store,
             Device::default(),
-        )
+        );
+        a.set_board(Board::Template(id));
+        a
+    }
+
+    fn press(a: &mut App, c: char) {
+        a.handle_event(&ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Char(c)),
+        ));
+    }
+
+    #[test]
+    fn dated_weeks_are_stored_on_first_edit() {
+        let mut a = app();
+        let this = week::this_monday();
+        press(&mut a, 't');
+        assert_eq!(a.board(), &Board::Week(this));
+        let s = render(&mut a, 180, 50);
+        assert!(s.contains("empty · p to apply"), "{s}");
+        assert!(s.contains(&format!("Week of {}", this.format("%a %-d %b %Y"))));
+        assert!(a.store.weeks.is_empty());
+
+        press(&mut a, 'S');
+        assert_eq!(a.store.weeks.len(), 1);
+        assert_eq!(a.store.weeks[0].monday, this);
+        assert_eq!(a.store.weeks[0].plan.name, "");
+
+        press(&mut a, ']');
+        let next = this + chrono::Days::new(7);
+        assert_eq!(a.board(), &Board::Week(next));
+        assert!(a.plan().is_empty());
+        press(&mut a, 'p');
+        a.handle_event(&ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter),
+        ));
+        let mondays: Vec<_> = a.store.weeks.iter().map(|w| w.monday).collect();
+        assert_eq!(mondays, [this, next]);
+        assert_eq!(a.plan().name, "Base");
+        assert!(render(&mut a, 180, 50).contains("· from \"Base\""));
+
+        press(&mut a, '[');
+        press(&mut a, '[');
+        assert_eq!(a.board(), &Board::Week(this - chrono::Days::new(7)));
     }
 
     fn text(buf: &Buffer) -> String {

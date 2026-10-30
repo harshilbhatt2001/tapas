@@ -1,7 +1,10 @@
 {
   pkgs,
+  config,
   ...
-}: {
+}: let
+  dev = "${config.devenv.root}/.dev";
+in {
   imports = [./claude-code.nix];
 
   languages.rust.enable = true;
@@ -32,6 +35,42 @@
   # and the phone only accepts updates signed by the same key.
   enterShell = ''
     export ANDROID_USER_HOME="$HOME/.android"
+  '';
+
+  # A local server for `devenv up`, with its state in .dev/. TAPAS_ALLOWED_EMAIL and
+  # TAPAS_GOOGLE_WEB_CLIENT_ID go in devenv.local.nix; the web client secret in
+  # .dev/google-web-client-secret.
+  env = {
+    TAPAS_DATABASE = "${dev}/tapas.db";
+    TAPAS_GOOGLE_WEB_CLIENT_SECRET_FILE = "${dev}/google-web-client-secret";
+    TAPAS_TOKEN_KEY_FILE = "${dev}/token-key";
+    RUST_LOG = "info";
+  };
+  processes.server = {
+    exec = ''
+      mkdir -p ${dev}
+      [ -e "$TAPAS_TOKEN_KEY_FILE" ] || head -c 32 /dev/urandom > "$TAPAS_TOKEN_KEY_FILE"
+      if [ ! -e "$TAPAS_GOOGLE_WEB_CLIENT_SECRET_FILE" ]; then
+        echo "missing $TAPAS_GOOGLE_WEB_CLIENT_SECRET_FILE: write the web client secret there" >&2
+        exit 1
+      fi
+      exec cargo run -p tapas-server -- serve
+    '';
+    watch = {
+      paths = [./crates ./Cargo.toml];
+      extensions = ["rs" "sql" "toml"];
+    };
+    ready.http.get = {
+      port = 8080;
+      path = "/healthz";
+    };
+  };
+
+  # Installs the debug app pointed at the local server through a USB reverse tunnel.
+  scripts.phone.exec = ''
+    adb reverse tcp:8080 tcp:8080
+    cd ${config.devenv.root}/android
+    ./gradlew installDebug -Ptapas.url=http://localhost:8080 "$@"
   '';
 
   # Pre-commit hooks; `devenv test` (and so CI) runs them on every file too.

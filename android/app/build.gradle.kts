@@ -11,9 +11,9 @@ val localProperties = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.reader()?.use(::load)
 }
 
-/** A setting from `local.properties`, else a Gradle property, else [default]. */
+/** A Gradle property (`-P`), else a setting from `local.properties`, else [default]. */
 fun setting(name: String, default: String): String =
-    localProperties.getProperty(name) ?: providers.gradleProperty(name).orNull ?: default
+    providers.gradleProperty(name).orNull ?: localProperties.getProperty(name) ?: default
 
 val generatedApi = layout.buildDirectory.dir("generated/openapi")
 

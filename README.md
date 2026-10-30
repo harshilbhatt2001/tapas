@@ -55,6 +55,43 @@ cd android
 The app is signed with `~/.android/debug.keystore`; back it up, since a new key means a new
 SHA-1 in Google Cloud and reinstalling the app.
 
+## Running locally
+
+Sign-in still goes through Google, so the Web and Android OAuth clients from the
+[one-time setup](#one-time-setup) must exist; for local work the consent screen can stay in
+Testing with yourself as a test user.
+
+**Server.** Put your account and the web client id in `devenv.local.nix` (not committed):
+
+```nix
+{
+  env.TAPAS_ALLOWED_EMAIL = "you@gmail.com";
+  env.TAPAS_GOOGLE_WEB_CLIENT_ID = "<web client id>.apps.googleusercontent.com";
+}
+```
+
+and the web client secret in `.dev/` (not committed):
+
+```sh
+mkdir -p .dev && printf %s "$WEB_CLIENT_SECRET" > .dev/google-web-client-secret
+devenv up    # http://127.0.0.1:8080, restarts on every change under crates/
+```
+
+The first start creates `.dev/token-key` and `.dev/tapas.db`. The same variables are set in
+`devenv shell`, so `cargo run -p tapas-server -- serve` works there too.
+
+**App on a phone over USB** (with the server running):
+
+```sh
+phone    # adb reverse tcp:8080 + ./gradlew installDebug against http://localhost:8080
+```
+
+`adb reverse` makes the phone's `localhost:8080` the laptop's, so there is no Wi-Fi or IP to
+manage; run `phone` again after reconnecting the cable. Debug builds allow plain HTTP to
+`localhost` and `10.0.2.2` (the emulator's host) only; release builds are HTTPS-only. A
+`-Ptapas.url=…` overrides `local.properties`, so a plain `./gradlew installDebug` goes back to
+the hosted server.
+
 ## Hosting
 
 The server runs on a Hetzner Cloud VPS with NixOS, declared in this repo's flake

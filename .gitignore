@@ -33,4 +33,7 @@ tokens*.json
 
 # Android SDK paths and state written by devenv's android module
 /local.properties
+
+# Local server state for `devenv up`
+/.dev/
 /.android/

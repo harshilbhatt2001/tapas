@@ -1,0 +1,374 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "tapas",
+    "description": "tapas server: JSON API, sign-in, source sync.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/google/grants": {
+      "post": {
+        "operationId": "connect_google",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectGoogle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Connected"
+          },
+          "400": {
+            "description": "Google refused the auth code"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/me": {
+      "get": {
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "The account and its Google grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/recent": {
+      "get": {
+        "operationId": "recent",
+        "responses": {
+          "200": {
+            "description": "Latest measurements and workouts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/session": {
+      "post": {
+        "operationId": "sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not the allowed Google account"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "sign_out",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "The server is up",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ConnectGoogle": {
+        "type": "object",
+        "required": [
+          "api",
+          "server_auth_code"
+        ],
+        "properties": {
+          "api": {
+            "$ref": "#/components/schemas/GoogleApi"
+          },
+          "server_auth_code": {
+            "type": "string",
+            "description": "From the app's authorization request with offline access for the server's Web client."
+          }
+        }
+      },
+      "GoogleApi": {
+        "type": "string",
+        "description": "A Google API with its own grant. The Health API rejects access tokens that also carry other\nAPIs' scopes (`DISALLOWED_OAUTH_SCOPES`), so each API is consented and refreshed apart.",
+        "enum": [
+          "health",
+          "calendar"
+        ]
+      },
+      "GrantStatus": {
+        "type": "object",
+        "required": [
+          "api",
+          "granted_at"
+        ],
+        "properties": {
+          "api": {
+            "$ref": "#/components/schemas/GoogleApi"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sync_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last sync's error; `None` once a sync succeeds."
+          },
+          "synced_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "email",
+          "grants"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantStatus"
+            }
+          }
+        }
+      },
+      "Measurement": {
+        "type": "object",
+        "description": "One reading of a metric at an instant.",
+        "required": [
+          "metric",
+          "at",
+          "value",
+          "source"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "metric": {
+            "$ref": "#/components/schemas/Metric"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "Metric": {
+        "type": "string",
+        "enum": [
+          "body_weight_kg"
+        ]
+      },
+      "Recent": {
+        "type": "object",
+        "required": [
+          "measurements",
+          "workouts"
+        ],
+        "properties": {
+          "measurements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Measurement"
+            }
+          },
+          "workouts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workout"
+            }
+          }
+        }
+      },
+      "SessionToken": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "SignIn": {
+        "type": "object",
+        "required": [
+          "id_token"
+        ],
+        "properties": {
+          "id_token": {
+            "type": "string",
+            "description": "A Google ID token issued for the server's Web client id."
+          }
+        }
+      },
+      "Source": {
+        "type": "string",
+        "description": "Where a measurement or workout was read from.",
+        "enum": [
+          "google_health",
+          "manual"
+        ]
+      },
+      "Workout": {
+        "type": "object",
+        "description": "A completed activity as its source reported it.",
+        "required": [
+          "source",
+          "source_id",
+          "activity",
+          "start",
+          "end"
+        ],
+        "properties": {
+          "active_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "activity": {
+            "type": "string",
+            "description": "The source's activity type, e.g. Google's `RUNNING`."
+          },
+          "avg_hr": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "distance_m": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kcal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "The source's own id, unique per source."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

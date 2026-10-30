@@ -1,0 +1,24 @@
+[package]
+name = "tapas-sources"
+description = "tapas source adapters: one module per integration."
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+tapas-core.workspace = true
+
+chrono.workspace = true
+google-calendar3 = { version = "7.0.0", default-features = false, features = ["aws-lc-rs"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["native-tokio", "http1", "http2", "aws-lc-rs"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1", "http2"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+utoipa.workspace = true
+
+[lints]
+workspace = true

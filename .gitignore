@@ -27,3 +27,10 @@ result-*
 client_secret*.json
 tokens*.json
 .env*
+
+# Server secrets copied by nixos-anywhere --extra-files
+/secrets
+
+# Android SDK paths and state written by devenv's android module
+/local.properties
+/.android/

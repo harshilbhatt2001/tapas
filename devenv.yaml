@@ -7,3 +7,18 @@ inputs:
         follows: nixpkgs
   nixpkgs:
     url: github:cachix/devenv-nixpkgs/rolling
+# The Android SDK packages are unfree.
+nixpkgs:
+  permitted_unfree_packages:
+    - android-sdk-cmdline-tools
+    - android-sdk-platform-tools
+    - platform-tools
+    - android-sdk-tools
+    - tools
+    - android-sdk-build-tools
+    - build-tools
+    - android-sdk-platforms
+    - platforms
+    - cmake
+    - cmdline-tools
+    - android-sdk-emulator

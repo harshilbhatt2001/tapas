@@ -17,6 +17,7 @@ pub struct GrantRow {
     pub granted_at: DateTime<Utc>,
     pub synced_at: Option<DateTime<Utc>>,
     pub sync_error: Option<String>,
+    pub needs_consent: bool,
 }
 
 impl Store {
@@ -85,7 +86,7 @@ impl Store {
         sqlx::query(
             "INSERT INTO google_grants (api, sealed_refresh_token, granted_at) VALUES (?, ?, ?)
              ON CONFLICT (api) DO UPDATE SET sealed_refresh_token = excluded.sealed_refresh_token,
-                 granted_at = excluded.granted_at, sync_error = NULL",
+                 granted_at = excluded.granted_at, sync_error = NULL, needs_consent = 0",
         )
         .bind(api.as_str())
         .bind(sealed_refresh_token)
@@ -103,9 +104,10 @@ impl Store {
             granted_at: DateTime<Utc>,
             synced_at: Option<DateTime<Utc>>,
             sync_error: Option<String>,
+            needs_consent: bool,
         }
         let rows: Vec<Row> = sqlx::query_as(
-            "SELECT api, sealed_refresh_token, granted_at, synced_at, sync_error
+            "SELECT api, sealed_refresh_token, granted_at, synced_at, sync_error, needs_consent
              FROM google_grants ORDER BY api",
         )
         .fetch_all(&self.0)
@@ -118,6 +120,7 @@ impl Store {
                     granted_at: r.granted_at,
                     synced_at: r.synced_at,
                     sync_error: r.sync_error,
+                    needs_consent: r.needs_consent,
                 })
             })
             .collect()
@@ -128,14 +131,16 @@ impl Store {
         api: GoogleApi,
         at: DateTime<Utc>,
         error: Option<&str>,
+        needs_consent: bool,
     ) -> Result<()> {
         sqlx::query(
             "UPDATE google_grants SET synced_at = CASE WHEN ? IS NULL THEN ? ELSE synced_at END,
-                 sync_error = ? WHERE api = ?",
+                 sync_error = ?, needs_consent = ? WHERE api = ?",
         )
         .bind(error)
         .bind(at)
         .bind(error)
+        .bind(needs_consent)
         .bind(api.as_str())
         .execute(&self.0)
         .await?;
@@ -288,11 +293,11 @@ mod tests {
             .await
             .unwrap();
         store
-            .record_sync(GoogleApi::Health, t0, None)
+            .record_sync(GoogleApi::Health, t0, None, false)
             .await
             .unwrap();
         store
-            .record_sync(GoogleApi::Health, t1, Some("403"))
+            .record_sync(GoogleApi::Health, t1, Some("403"), false)
             .await
             .unwrap();
         let grant = store.grants().await.unwrap().remove(0);

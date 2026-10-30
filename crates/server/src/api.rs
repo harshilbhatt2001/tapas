@@ -140,6 +140,8 @@ struct GrantStatus {
     synced_at: Option<DateTime<Utc>>,
     /// The last sync's error; `None` once a sync succeeds.
     sync_error: Option<String>,
+    /// Google revoked the grant; the app asks for consent again.
+    needs_consent: bool,
 }
 
 #[utoipa::path(get, path = "/api/me", responses((status = 200, description = "The account and its Google grants", body = Me)), security(("session" = [])))]
@@ -154,6 +156,7 @@ async fn me(State(state): State<AppState>, _: Session) -> Result<Json<Me>, ApiEr
             granted_at: g.granted_at,
             synced_at: g.synced_at,
             sync_error: g.sync_error,
+            needs_consent: g.needs_consent,
         })
         .collect();
     Ok(Json(Me {

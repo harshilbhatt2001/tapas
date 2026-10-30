@@ -173,7 +173,8 @@
         "type": "object",
         "required": [
           "api",
-          "granted_at"
+          "granted_at",
+          "needs_consent"
         ],
         "properties": {
           "api": {
@@ -182,6 +183,10 @@
           "granted_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "needs_consent": {
+            "type": "boolean",
+            "description": "Google revoked the grant; the app asks for consent again."
           },
           "sync_error": {
             "type": [

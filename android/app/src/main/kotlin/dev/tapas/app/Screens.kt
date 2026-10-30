@@ -5,23 +5,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import dev.tapas.api.models.GoogleApi
 import dev.tapas.api.models.GrantStatus
 import dev.tapas.api.models.Measurement
 import dev.tapas.api.models.Me
@@ -39,10 +36,8 @@ private fun OffsetDateTime.local(): String =
 @Composable
 fun TapasApp(
     state: UiState,
-    onSignIn: () -> Unit,
+    onContinueWithGoogle: () -> Unit,
     onSignOut: () -> Unit,
-    onRefresh: () -> Unit,
-    onConnect: (GoogleApi) -> Unit,
 ) {
     Scaffold { padding ->
         Column(Modifier.padding(padding).padding(16.dp).fillMaxSize()) {
@@ -53,23 +48,22 @@ fun TapasApp(
                 Screen.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                Screen.SignedOut -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Button(onClick = onSignIn) { Text("Sign in with Google") }
+                is Screen.SignedOut -> {
+                    if (screen.continueAutomatically) {
+                        LaunchedEffect(screen) { onContinueWithGoogle() }
+                    }
+                    Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Button(onClick = onContinueWithGoogle) { Text("Continue with Google") }
+                    }
                 }
-                is Screen.Home -> Home(screen.me, screen.recent, onSignOut, onRefresh, onConnect)
+                is Screen.Home -> Home(screen.me, screen.recent, onContinueWithGoogle, onSignOut)
             }
         }
     }
 }
 
 @Composable
-private fun Home(
-    me: Me,
-    recent: Recent,
-    onSignOut: () -> Unit,
-    onRefresh: () -> Unit,
-    onConnect: (GoogleApi) -> Unit,
-) {
+private fun Home(me: Me, recent: Recent, onRefresh: () -> Unit, onSignOut: () -> Unit) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -78,9 +72,7 @@ private fun Home(
                 TextButton(onClick = onSignOut) { Text("Sign out") }
             }
         }
-        items(GoogleApi.entries) { api ->
-            GrantCard(api, me.grants.find { it.api == api }, onConnect)
-        }
+        item { SyncStatus(me.grants) }
         item { Text("Weights", style = MaterialTheme.typography.titleMedium) }
         items(recent.measurements) { MeasurementRow(it) }
         item { Text("Workouts", style = MaterialTheme.typography.titleMedium) }
@@ -88,22 +80,20 @@ private fun Home(
     }
 }
 
+/** One quiet line per Google API; errors only when a sync failed. */
 @Composable
-private fun GrantCard(api: GoogleApi, grant: GrantStatus?, onConnect: (GoogleApi) -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Google ${api.value}", style = MaterialTheme.typography.titleSmall)
-                when {
-                    grant == null -> Text("Not connected")
-                    grant.syncError != null ->
-                        Text(grant.syncError, color = MaterialTheme.colorScheme.error)
-                    grant.syncedAt != null -> Text("Synced ${grant.syncedAt.local()}")
-                    else -> Text("Connected ${grant.grantedAt.local()}, not synced yet")
-                }
-            }
-            OutlinedButton(onClick = { onConnect(api) }) {
-                Text(if (grant == null) "Connect" else "Reconnect")
+private fun SyncStatus(grants: List<GrantStatus>) {
+    Column {
+        for (grant in grants) {
+            val name = grant.api.value.replaceFirstChar(Char::uppercase)
+            when {
+                grant.syncError != null ->
+                    Text("$name: ${grant.syncError}", color = MaterialTheme.colorScheme.error)
+                grant.syncedAt != null -> Text(
+                    "$name synced ${grant.syncedAt.local()}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                else -> Text("$name: first sync running", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

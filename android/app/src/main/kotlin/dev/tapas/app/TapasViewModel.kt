@@ -18,7 +18,10 @@ import kotlinx.coroutines.launch
 
 sealed interface Screen {
     data object Loading : Screen
-    data object SignedOut : Screen
+
+    /** [continueAutomatically] is false once the user dismissed Google's sheet. */
+    data class SignedOut(val continueAutomatically: Boolean) : Screen
+
     data class Home(val me: Me, val recent: Recent) : Screen
 }
 
@@ -34,64 +37,65 @@ class TapasViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    /** The API whose consent screen is showing, so its result can be sent to the server. */
-    var apiAwaitingConsent: GoogleApi? = null
-
-    init {
+    /**
+     * Everything Google in one go: sign in if there is no session, ask consent for any API the
+     * server can't read yet, then load. Consent screens appear only the first time.
+     */
+    fun continueWithGoogle(google: GoogleAccount) {
         viewModelScope.launch {
-            sessionToken = session.token.first()
-            if (sessionToken == null) show(Screen.SignedOut) else refresh()
+            try {
+                if (state.value.screen !is Screen.Home) show(Screen.Loading)
+                if (sessionToken == null) sessionToken = session.token.first()
+                if (sessionToken == null) signIn(google)
+                val me = api.me().bodyOrThrow()
+                for (missing in GoogleApi.entries.filter { it.needsConsent(me) }) {
+                    api.connectGoogle(ConnectGoogle(missing, google.serverAuthCode(missing)))
+                        .successOrThrow()
+                }
+                load()
+            } catch (_: SignedOutException) {
+                session.clear()
+                sessionToken = null
+                show(Screen.SignedOut(continueAutomatically = true))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val screen = state.value.screen
+                _state.value = UiState(
+                    if (screen is Screen.Home) screen else Screen.SignedOut(false),
+                    error.message ?: error.toString(),
+                )
+            }
         }
     }
 
-    fun signIn(idToken: String) = launchAction {
-        val token = api.signIn(SignIn(idToken)).bodyOrThrow().token
+    fun signOut() {
+        viewModelScope.launch {
+            runCatching { api.signOut() }
+            session.clear()
+            sessionToken = null
+            show(Screen.SignedOut(continueAutomatically = false))
+        }
+    }
+
+    private suspend fun signIn(google: GoogleAccount) {
+        val token = try {
+            api.signIn(SignIn(google.idToken())).bodyOrThrow().token
+        } catch (_: SignedOutException) {
+            error("This Google account may not use tapas")
+        }
         session.save(token)
         sessionToken = token
-        load()
-    }
-
-    fun signOut() = launchAction {
-        api.signOut()
-        forgetSession()
-    }
-
-    fun refresh() = launchAction { load() }
-
-    fun connect(api: GoogleApi, serverAuthCode: String) = launchAction {
-        this.api.connectGoogle(ConnectGoogle(api, serverAuthCode)).successOrThrow()
-        load()
-    }
-
-    fun fail(error: Throwable) {
-        _state.update { it.copy(error = error.message ?: error.toString()) }
     }
 
     private suspend fun load() {
         show(Screen.Home(api.me().bodyOrThrow(), api.recent().bodyOrThrow()))
     }
 
-    private suspend fun forgetSession() {
-        session.clear()
-        sessionToken = null
-        show(Screen.SignedOut)
-    }
-
     private fun show(screen: Screen) {
-        _state.value = UiState(screen)
-    }
-
-    private fun launchAction(action: suspend () -> Unit) {
-        viewModelScope.launch {
-            try {
-                action()
-            } catch (_: SignedOutException) {
-                forgetSession()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                fail(error)
-            }
-        }
+        _state.update { UiState(screen) }
     }
 }
+
+private fun GoogleApi.needsConsent(me: Me): Boolean =
+    me.grants.none { it.api == this && !it.needsConsent }

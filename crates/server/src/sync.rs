@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Days, Utc};
-use tapas_sources::google::oauth::GoogleApi;
+use tapas_sources::google::oauth::{self, GoogleApi};
 use tapas_sources::google::{calendar, health};
 
 use crate::api::AppState;
@@ -31,17 +31,21 @@ pub async fn run(state: AppState) {
 
 async fn sync_all(state: &AppState) -> Result<()> {
     for grant in state.store.grants().await? {
+        if grant.needs_consent {
+            continue;
+        }
         let now = Utc::now();
-        let error = sync_grant(state, &grant, now)
-            .await
-            .err()
-            .map(|e| format!("{e:#}"));
+        let error = sync_grant(state, &grant, now).await.err();
+        let needs_consent = error
+            .as_ref()
+            .is_some_and(|e| matches!(e.downcast_ref(), Some(oauth::Error::InvalidGrant)));
+        let error = error.map(|e| format!("{e:#}"));
         if let Some(error) = &error {
             tracing::warn!("sync {}: {error}", grant.api.as_str());
         }
         state
             .store
-            .record_sync(grant.api, now, error.as_deref())
+            .record_sync(grant.api, now, error.as_deref(), needs_consent)
             .await?;
     }
     Ok(())

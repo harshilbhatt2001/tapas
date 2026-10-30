@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS google_grants (
     sealed_refresh_token BLOB NOT NULL,
     granted_at TEXT NOT NULL,
     synced_at TEXT,
-    sync_error TEXT
+    sync_error TEXT,
+    -- Google refused the refresh token: only a new consent in the app helps.
+    needs_consent INTEGER NOT NULL DEFAULT 0
 );
 
 -- App sessions, stored as SHA-256 of the bearer token.

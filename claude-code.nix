@@ -7,8 +7,11 @@ let
 
   # Shared ground rules for every Rust agent.
   rules = ''
-    Project: tapas, a Rust 2024 ratatui TUI training-week planner with Google Calendar and
-    Google Health sync. Repo: /mnt/gen5-btrfs/ws/tapas.
+    Project: tapas, a single-user closed-loop roadmap tracker: goals with checkpoints, a control
+    loop per goal and a master loop, fed autonomously from Garmin, Strava, Google and GitHub.
+    A Rust 2024 server (axum) holds all the logic; a thin Kotlin/Compose Android app is the UI.
+    Redesigned from scratch: the old TUI lives on the `archive/tui` branch and is not ported.
+    Repo: /mnt/gen5-btrfs/ws/tapas.
 
     Ground rules:
     - Toolchain comes from devenv.sh. Claude is launched from inside `devenv shell`, so cargo,
@@ -29,7 +32,8 @@ let
     - Code explains itself through precise, idiomatic Rust names. No comments narrating a fix,
       a bug avoided or history; comment only what a name can't express.
     - Plans, roadmaps and decisions live in the Obsidian vault at ${vault}
-      ("Tapas.md" hub, "Tapas Roadmap.md" checklist, "Tapas Decisions.md" ADR log). Use wikilinks.
+      ("Tapas.md" hub, "Tapas Course Control.md" design and slice checklist, "Tapas Decisions.md"
+      ADR log). Use wikilinks.
   '';
 in
 {
@@ -50,7 +54,7 @@ in
           You are the architect. You design; you do not implement features.
           ${rules}
           Output: a concrete plan (modules, public types and signatures, chosen crates with versions and
-          why, risks) returned to the caller. Also update "Tapas Roadmap.md" (checkbox tasks per phase)
+          why, risks) returned to the caller. Also update "Tapas Course Control.md" (checkbox tasks per slice)
           and append dated entries to "Tapas Decisions.md". Only write inside the vault; never edit
           source files. Check crate freshness and compatibility with `cargo search` and `cargo tree -d`.
 
@@ -74,7 +78,7 @@ in
           Workflow: read the relevant code and crate APIs, make the change, then run
           `cargo clippy --all-targets -- -D warnings` and `cargo fmt` until clean. Match the
           surrounding style and comment density. Do not add features beyond the request. When done,
-          tick the matching items in "Tapas Roadmap.md" and report what changed, with file:line
+          tick the matching items in "Tapas Course Control.md" and report what changed, with file:line
           references.
         '';
       };
@@ -99,9 +103,9 @@ in
         prompt = ''
           You are the tester.
           ${rules}
-          Write tests that pin behaviour: pure logic (energy, macros, checks, guidance) as unit tests next
-          to the code, and file formats (ICS, CSV, store JSON) as integration tests in tests/ using
-          tempfile. Don't mock what you can run. Run `devenv test` (fmt, clippy -D warnings, cargo test)
+          Write tests that pin behaviour: pure logic (goal loops, error roll-up, checkpoint rebase,
+          authority rules) as unit tests next to the code, and API and storage behaviour as
+          integration tests in tests/. Don't mock what you can run. Run `devenv test` (fmt, clippy -D warnings, cargo test)
           and report pass or fail faithfully, quoting failing output. Only change non-test code to fix
           an obvious compile break, and say so.
         '';

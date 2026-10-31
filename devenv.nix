@@ -60,6 +60,7 @@ in {
       paths = [./crates ./Cargo.toml];
       extensions = ["rs" "sql" "toml"];
     };
+    restart.on = "never";
     ready.http.get = {
       port = 8080;
       path = "/healthz";

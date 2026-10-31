@@ -10,6 +10,167 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/course": {
+      "get": {
+        "operationId": "course",
+        "responses": {
+          "200": {
+            "description": "Every goal's status and the master's verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/goals": {
+      "get": {
+        "operationId": "goals",
+        "responses": {
+          "200": {
+            "description": "The goal tree, flat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Goal"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "create_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Goal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid goal"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/goals/{id}": {
+      "put": {
+        "operationId": "update_goal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The goal's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Goal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid goal"
+          },
+          "404": {
+            "description": "No such goal"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "delete_goal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The goal's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted with its subtree"
+          },
+          "400": {
+            "description": "The master goal cannot be deleted"
+          },
+          "404": {
+            "description": "No such goal"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/google/grants": {
       "post": {
         "operationId": "connect_google",
@@ -82,6 +243,154 @@
         ]
       }
     },
+    "/api/series": {
+      "get": {
+        "operationId": "series",
+        "responses": {
+          "200": {
+            "description": "Every series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Series"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "create_series",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeriesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Series"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/series/{id}/entries/{day}": {
+      "put": {
+        "operationId": "put_manual_entry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The series' id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "day",
+            "in": "path",
+            "description": "The day the value is for",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, replacing that day's value"
+          },
+          "400": {
+            "description": "The series is not fed manually"
+          },
+          "404": {
+            "description": "No such series"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/series/{id}/weeks": {
+      "get": {
+        "operationId": "series_weeks",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The series' id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weekly values, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Observation"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such series"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/session": {
       "post": {
         "operationId": "sign_in",
@@ -145,6 +454,14 @@
   },
   "components": {
     "schemas": {
+      "Aggregation": {
+        "type": "string",
+        "description": "How a week's readings collapse into one value.",
+        "enum": [
+          "level",
+          "sum"
+        ]
+      },
       "ConnectGoogle": {
         "type": "object",
         "required": [
@@ -160,6 +477,248 @@
             "description": "From the app's authorization request with offline access for the server's Web client."
           }
         }
+      },
+      "Course": {
+        "type": "object",
+        "description": "The whole tree's status on one day.",
+        "required": [
+          "nodes",
+          "master"
+        ],
+        "properties": {
+          "master": {
+            "$ref": "#/components/schemas/MasterVerdict"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeStatus"
+            },
+            "description": "One per goal, master included."
+          }
+        }
+      },
+      "Feed": {
+        "type": "string",
+        "description": "Where a series' readings come from.",
+        "enum": [
+          "manual",
+          "body_weight",
+          "training_hours"
+        ]
+      },
+      "Goal": {
+        "type": "object",
+        "description": "A node in the goal tree. The root is the single [`GoalKind::Master`]; checkpoints are child\ngoals stacked under their parent by due date.",
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "weight"
+        ],
+        "properties": {
+          "capacity_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Master only: total weekly hours available."
+          },
+          "done_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Milestones: the day it was ticked done."
+          },
+          "due": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GoalKind"
+          },
+          "max_ramp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Largest allowed week-on-week rise of the weekly amount, as a fraction (0.1 = +10 %)."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "series_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Controlled goals: the series steered on a straight path from `start_value` to\n`target_value`."
+          },
+          "start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Where the reference path starts. A checkpoint without one starts where the previous\ncheckpoint in its stack ends, in date and value."
+          },
+          "start_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For an [`Aggregation::Sum`] series, a running total since `start`."
+          },
+          "target_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The goal merges once its series reaches this. For an [`Aggregation::Sum`] series, a\nrunning total since `start`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "weekly_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Weekly time this goal needs."
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Share of the parent's error."
+          }
+        }
+      },
+      "GoalInput": {
+        "type": "object",
+        "description": "A goal as the app creates or edits it: every [`Goal`] field but the id.",
+        "required": [
+          "title",
+          "kind",
+          "weight"
+        ],
+        "properties": {
+          "capacity_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Master only: total weekly hours available."
+          },
+          "done_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Milestones: the day it was ticked done."
+          },
+          "due": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GoalKind"
+          },
+          "max_ramp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Largest allowed week-on-week rise of the weekly amount, as a fraction (0.1 = +10 %)."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "series_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Controlled goals: the series steered on a straight path from `start_value` to\n`target_value`."
+          },
+          "start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Where the reference path starts; without one a checkpoint starts where the previous\ncheckpoint in its stack ends, in date and value."
+          },
+          "start_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For a `sum` series, a running total since `start`."
+          },
+          "target_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The goal merges once its series reaches this. For a `sum` series, a running total since\n`start`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "weekly_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Weekly time this goal needs."
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Share of the parent's error."
+          }
+        }
+      },
+      "GoalKind": {
+        "type": "string",
+        "enum": [
+          "master",
+          "controlled",
+          "milestone"
+        ]
       },
       "GoogleApi": {
         "type": "string",
@@ -201,6 +760,90 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "LoopTerms": {
+        "type": "object",
+        "description": "A loop's error terms, all in days.",
+        "required": [
+          "p",
+          "i",
+          "d"
+        ],
+        "properties": {
+          "d": {
+            "type": "number",
+            "format": "double",
+            "description": "Change of the gap per week; positive means falling behind."
+          },
+          "i": {
+            "type": "number",
+            "format": "double",
+            "description": "The mean gap over a rolling window."
+          },
+          "p": {
+            "type": "number",
+            "format": "double",
+            "description": "The gap now."
+          }
+        }
+      },
+      "ManualEntry": {
+        "type": "object",
+        "description": "A manual series' value for one day.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "MasterVerdict": {
+        "type": "object",
+        "description": "The master goal's judgement of the whole tree.",
+        "required": [
+          "days_behind",
+          "needed_hours",
+          "overcommitted",
+          "mode",
+          "drifting"
+        ],
+        "properties": {
+          "capacity_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "days_behind": {
+            "type": "number",
+            "format": "double",
+            "description": "The weighted error of the whole tree."
+          },
+          "drifting": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Goals whose error keeps growing."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/Mode"
+          },
+          "needed_hours": {
+            "type": "number",
+            "format": "double",
+            "description": "Weekly hours the active goals need."
+          },
+          "overcommitted": {
+            "type": "boolean",
+            "description": "`needed_hours` exceeds `capacity_hours`."
           }
         }
       },
@@ -254,6 +897,122 @@
           "body_weight_kg"
         ]
       },
+      "Mode": {
+        "type": "string",
+        "description": "Which plan the week runs.",
+        "enum": [
+          "a",
+          "b"
+        ]
+      },
+      "NodeState": {
+        "type": "string",
+        "enum": [
+          "on_course",
+          "ahead",
+          "behind",
+          "conflict",
+          "sensor_stale",
+          "pending",
+          "merged",
+          "upcoming",
+          "due_soon",
+          "done",
+          "overdue"
+        ]
+      },
+      "NodeStatus": {
+        "type": "object",
+        "description": "One goal's status.",
+        "required": [
+          "goal_id",
+          "state",
+          "path"
+        ],
+        "properties": {
+          "conflict": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why catching up breaks a limit."
+          },
+          "days_behind": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Negative when ahead; `None` while pending, done or stale."
+          },
+          "goal_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "needed_per_week": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Weekly amount that gets back to the path, clamped to the goal's limits."
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Observation"
+            },
+            "description": "The reference path, one point per week."
+          },
+          "projected_arrival": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "slack_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How far the rest of the stack can slip before the parent's due date."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeState"
+          },
+          "terms": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LoopTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Observation": {
+        "type": "object",
+        "description": "A series' value for one ISO week.",
+        "required": [
+          "week",
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "number",
+            "format": "double"
+          },
+          "week": {
+            "type": "string",
+            "format": "date",
+            "description": "The ISO week's Monday."
+          }
+        }
+      },
       "Recent": {
         "type": "object",
         "required": [
@@ -272,6 +1031,55 @@
             "items": {
               "$ref": "#/components/schemas/Workout"
             }
+          }
+        }
+      },
+      "Series": {
+        "type": "object",
+        "description": "A weekly series a controlled goal can steer.",
+        "required": [
+          "id",
+          "name",
+          "unit",
+          "aggregation",
+          "feed"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/Aggregation"
+          },
+          "feed": {
+            "$ref": "#/components/schemas/Feed"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "SeriesInput": {
+        "type": "object",
+        "description": "A user-created series; its feed is always manual.",
+        "required": [
+          "name",
+          "unit",
+          "aggregation"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/Aggregation"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
           }
         }
       },

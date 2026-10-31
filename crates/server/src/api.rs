@@ -1,15 +1,17 @@
 //! The JSON API the Android app talks to. Its `OpenAPI` document generates the app's client.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use anyhow::Context;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use tapas_core::engine::Course;
-use tapas_core::{Aggregation, Goal, GoalKind, Measurement, Observation, Series, Workout};
+use tapas_core::engine::{self, Course, Readings};
+use tapas_core::{Aggregation, Feed, Goal, GoalKind, Measurement, Observation, Series, Workout};
 use tapas_sources::google::oauth::{GoogleApi, WebClient};
 use tokio::sync::Notify;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -38,7 +40,6 @@ pub enum ApiError {
     Unauthorized,
     #[error("{0}")]
     BadRequest(String),
-    #[expect(dead_code, reason = "constructed once the slice 1 handlers land")]
     #[error("not found")]
     NotFound,
     #[error(transparent)]
@@ -226,7 +227,6 @@ async fn recent(State(state): State<AppState>, _: Session) -> Result<Json<Recent
 
 /// A goal as the app creates or edits it: every [`Goal`] field but the id.
 #[derive(Deserialize, ToSchema)]
-#[expect(dead_code, reason = "read once the slice 1 handlers land")]
 struct GoalInput {
     parent_id: Option<i64>,
     title: String,
@@ -255,9 +255,94 @@ struct GoalInput {
     max_ramp: Option<f64>,
 }
 
+impl GoalInput {
+    fn into_goal(self, id: i64) -> Goal {
+        Goal {
+            id,
+            parent_id: self.parent_id,
+            title: self.title,
+            kind: self.kind,
+            due: self.due,
+            start: self.start,
+            series_id: self.series_id,
+            start_value: self.start_value,
+            target_value: self.target_value,
+            done_on: self.done_on,
+            weight: self.weight,
+            weekly_hours: self.weekly_hours,
+            capacity_hours: self.capacity_hours,
+            max_ramp: self.max_ramp,
+        }
+    }
+}
+
+/// Checks that `goal` fits the tree `goals`, either as a new goal or replacing `previous`.
+fn validate_goal(
+    goal: &Goal,
+    previous: Option<&Goal>,
+    goals: &[Goal],
+    series: &[Series],
+) -> Result<(), ApiError> {
+    let refuse = |message: String| Err(ApiError::BadRequest(message));
+    match (previous.map(|p| p.kind), goal.kind) {
+        (None, GoalKind::Master) => return refuse("the master goal already exists".into()),
+        (Some(GoalKind::Master), GoalKind::Master) => {
+            if goal.parent_id.is_some() {
+                return refuse("the master goal has no parent".into());
+            }
+        }
+        (Some(_), GoalKind::Master) => return refuse("a goal cannot become the master".into()),
+        (Some(GoalKind::Master), _) => {
+            return refuse("the master goal must stay the master".into());
+        }
+        _ => {
+            let Some(parent_id) = goal.parent_id else {
+                return refuse("a goal needs a parent".into());
+            };
+            if !goals.iter().any(|g| g.id == parent_id) {
+                return refuse(format!("parent goal {parent_id} does not exist"));
+            }
+            if previous.is_some() {
+                let mut ancestor = Some(parent_id);
+                while let Some(id) = ancestor {
+                    if id == goal.id {
+                        return refuse("a goal cannot sit under itself or its subgoals".into());
+                    }
+                    ancestor = goals.iter().find(|g| g.id == id).and_then(|g| g.parent_id);
+                }
+            }
+        }
+    }
+    match goal.series_id {
+        Some(id) if !series.iter().any(|s| s.id == id) => {
+            return refuse(format!("series {id} does not exist"));
+        }
+        None if goal.kind == GoalKind::Controlled => {
+            return refuse("a controlled goal needs a series".into());
+        }
+        _ => {}
+    }
+    if goal.weight <= 0.0 {
+        return refuse("weight must be above 0".into());
+    }
+    if goal.max_ramp.is_some_and(|ramp| ramp < 0.0) {
+        return refuse("max_ramp must not be negative".into());
+    }
+    Ok(())
+}
+
+fn ensure_deletable(goal: &Goal) -> Result<(), ApiError> {
+    if goal.kind == GoalKind::Master {
+        return Err(ApiError::BadRequest(
+            "the master goal cannot be deleted".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[utoipa::path(get, path = "/api/goals", responses((status = 200, description = "The goal tree, flat", body = Vec<Goal>)), security(("session" = [])))]
-async fn goals(State(_state): State<AppState>, _: Session) -> Result<Json<Vec<Goal>>, ApiError> {
-    todo!("slice 1 server")
+async fn goals(State(state): State<AppState>, _: Session) -> Result<Json<Vec<Goal>>, ApiError> {
+    Ok(Json(state.store.goals().await?))
 }
 
 #[utoipa::path(
@@ -269,11 +354,15 @@ async fn goals(State(_state): State<AppState>, _: Session) -> Result<Json<Vec<Go
     security(("session" = []))
 )]
 async fn create_goal(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     _: Session,
-    Json(_body): Json<GoalInput>,
+    Json(body): Json<GoalInput>,
 ) -> Result<Json<Goal>, ApiError> {
-    todo!("slice 1 server")
+    let mut goal = body.into_goal(0);
+    let goals = state.store.goals().await?;
+    validate_goal(&goal, None, &goals, &state.store.all_series().await?)?;
+    goal.id = state.store.insert_goal(&goal).await?;
+    Ok(Json(goal))
 }
 
 #[utoipa::path(
@@ -287,12 +376,25 @@ async fn create_goal(
     security(("session" = []))
 )]
 async fn update_goal(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     _: Session,
-    Path(_id): Path<i64>,
-    Json(_body): Json<GoalInput>,
+    Path(id): Path<i64>,
+    Json(body): Json<GoalInput>,
 ) -> Result<Json<Goal>, ApiError> {
-    todo!("slice 1 server")
+    let goals = state.store.goals().await?;
+    let previous = goals
+        .iter()
+        .find(|g| g.id == id)
+        .ok_or(ApiError::NotFound)?;
+    let goal = body.into_goal(id);
+    validate_goal(
+        &goal,
+        Some(previous),
+        &goals,
+        &state.store.all_series().await?,
+    )?;
+    state.store.update_goal(&goal).await?;
+    Ok(Json(goal))
 }
 
 #[utoipa::path(
@@ -305,21 +407,23 @@ async fn update_goal(
     security(("session" = []))
 )]
 async fn delete_goal(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     _: Session,
-    Path(_id): Path<i64>,
+    Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    todo!("slice 1 server")
+    let goal = state.store.goal(id).await?.ok_or(ApiError::NotFound)?;
+    ensure_deletable(&goal)?;
+    state.store.delete_goal(id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(get, path = "/api/series", responses((status = 200, description = "Every series", body = Vec<Series>)), security(("session" = [])))]
-async fn series(State(_state): State<AppState>, _: Session) -> Result<Json<Vec<Series>>, ApiError> {
-    todo!("slice 1 server")
+async fn series(State(state): State<AppState>, _: Session) -> Result<Json<Vec<Series>>, ApiError> {
+    Ok(Json(state.store.all_series().await?))
 }
 
 /// A user-created series; its feed is always manual.
 #[derive(Deserialize, ToSchema)]
-#[expect(dead_code, reason = "read once the slice 1 handlers land")]
 struct SeriesInput {
     name: String,
     unit: String,
@@ -334,11 +438,15 @@ struct SeriesInput {
     security(("session" = []))
 )]
 async fn create_series(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     _: Session,
-    Json(_body): Json<SeriesInput>,
+    Json(body): Json<SeriesInput>,
 ) -> Result<Json<Series>, ApiError> {
-    todo!("slice 1 server")
+    let series = state
+        .store
+        .insert_series(&body.name, &body.unit, body.aggregation)
+        .await?;
+    Ok(Json(series))
 }
 
 #[utoipa::path(
@@ -350,16 +458,20 @@ async fn create_series(
     security(("session" = []))
 )]
 async fn series_weeks(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     _: Session,
-    Path(_id): Path<i64>,
+    Path(id): Path<i64>,
 ) -> Result<Json<Vec<Observation>>, ApiError> {
-    todo!("slice 1 server")
+    let series = state.store.series(id).await?.ok_or(ApiError::NotFound)?;
+    let weeks = state
+        .store
+        .series_weeks(&series, Utc::now().date_naive())
+        .await?;
+    Ok(Json(weeks))
 }
 
 /// A manual series' value for one day.
 #[derive(Deserialize, ToSchema)]
-#[expect(dead_code, reason = "read once the slice 1 handlers land")]
 struct ManualEntry {
     value: f64,
 }
@@ -376,17 +488,43 @@ struct ManualEntry {
     security(("session" = []))
 )]
 async fn put_manual_entry(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     _: Session,
-    Path((_id, _day)): Path<(i64, NaiveDate)>,
-    Json(_body): Json<ManualEntry>,
+    Path((id, day)): Path<(i64, NaiveDate)>,
+    Json(body): Json<ManualEntry>,
 ) -> Result<StatusCode, ApiError> {
-    todo!("slice 1 server")
+    let series = state.store.series(id).await?.ok_or(ApiError::NotFound)?;
+    ensure_manual(&series)?;
+    state.store.upsert_manual_entry(id, day, body.value).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn ensure_manual(series: &Series) -> Result<(), ApiError> {
+    if series.feed != Feed::Manual {
+        return Err(ApiError::BadRequest(format!(
+            "series {} is fed from a source, not by hand",
+            series.id
+        )));
+    }
+    Ok(())
 }
 
 #[utoipa::path(get, path = "/api/course", responses((status = 200, description = "Every goal's status and the master's verdict", body = Course)), security(("session" = [])))]
-async fn course(State(_state): State<AppState>, _: Session) -> Result<Json<Course>, ApiError> {
-    todo!("slice 1 server")
+async fn course(State(state): State<AppState>, _: Session) -> Result<Json<Course>, ApiError> {
+    let today = Utc::now().date_naive();
+    let goals = state.store.goals().await?;
+    let series_ids: BTreeSet<i64> = goals.iter().filter_map(|g| g.series_id).collect();
+    let mut readings = Vec::with_capacity(series_ids.len());
+    for id in series_ids {
+        let series = state
+            .store
+            .series(id)
+            .await?
+            .with_context(|| format!("goal series {id} vanished"))?;
+        let weeks = state.store.series_weeks(&series, today).await?;
+        readings.push(Readings { series, weeks });
+    }
+    Ok(Json(engine::course(&goals, &readings, today)))
 }
 
 #[cfg(test)]
@@ -402,5 +540,107 @@ mod tests {
             generated.trim() == committed.trim(),
             "android/openapi.json is stale: run `cargo run -p tapas-server -- openapi > android/openapi.json`"
         );
+    }
+
+    fn goal(id: i64, parent_id: Option<i64>, kind: GoalKind) -> Goal {
+        Goal {
+            id,
+            parent_id,
+            title: format!("goal {id}"),
+            kind,
+            due: None,
+            start: None,
+            series_id: None,
+            start_value: None,
+            target_value: None,
+            done_on: None,
+            weight: 1.0,
+            weekly_hours: None,
+            capacity_hours: None,
+            max_ramp: None,
+        }
+    }
+
+    fn series(id: i64, feed: Feed) -> Series {
+        Series {
+            id,
+            name: format!("series {id}"),
+            unit: "h".into(),
+            aggregation: Aggregation::Sum,
+            feed,
+        }
+    }
+
+    /// Master 1 with child 2 and grandchild 3.
+    fn tree() -> Vec<Goal> {
+        vec![
+            goal(1, None, GoalKind::Master),
+            goal(2, Some(1), GoalKind::Milestone),
+            goal(3, Some(2), GoalKind::Milestone),
+        ]
+    }
+
+    #[test]
+    fn a_second_master_is_refused() {
+        let master = goal(0, None, GoalKind::Master);
+        assert!(validate_goal(&master, None, &tree(), &[]).is_err());
+    }
+
+    #[test]
+    fn a_goal_cannot_turn_into_the_master() {
+        let goals = tree();
+        let promoted = goal(2, None, GoalKind::Master);
+        assert!(validate_goal(&promoted, Some(&goals[1]), &goals, &[]).is_err());
+    }
+
+    #[test]
+    fn the_master_can_be_edited_in_place() {
+        let goals = tree();
+        let mut master = goals[0].clone();
+        master.capacity_hours = Some(12.0);
+        assert!(validate_goal(&master, Some(&goals[0]), &goals, &[]).is_ok());
+    }
+
+    #[test]
+    fn moving_a_goal_under_its_descendant_or_itself_is_refused() {
+        let goals = tree();
+        for parent in [2, 3] {
+            let moved = goal(2, Some(parent), GoalKind::Milestone);
+            assert!(validate_goal(&moved, Some(&goals[1]), &goals, &[]).is_err());
+        }
+        let moved = goal(3, Some(1), GoalKind::Milestone);
+        assert!(validate_goal(&moved, Some(&goals[2]), &goals, &[]).is_ok());
+    }
+
+    #[test]
+    fn a_goal_without_an_existing_parent_is_refused() {
+        for parent in [None, Some(99)] {
+            let orphan = goal(0, parent, GoalKind::Milestone);
+            assert!(validate_goal(&orphan, None, &tree(), &[]).is_err());
+        }
+    }
+
+    #[test]
+    fn a_controlled_goal_needs_an_existing_series() {
+        let known = [series(1, Feed::BodyWeight)];
+        let mut controlled = goal(0, Some(1), GoalKind::Controlled);
+        assert!(validate_goal(&controlled, None, &tree(), &known).is_err());
+        controlled.series_id = Some(7);
+        assert!(validate_goal(&controlled, None, &tree(), &known).is_err());
+        controlled.series_id = Some(1);
+        assert!(validate_goal(&controlled, None, &tree(), &known).is_ok());
+    }
+
+    #[test]
+    fn the_master_cannot_be_deleted() {
+        let goals = tree();
+        assert!(ensure_deletable(&goals[0]).is_err());
+        assert!(ensure_deletable(&goals[1]).is_ok());
+    }
+
+    #[test]
+    fn only_manual_series_take_entries() {
+        assert!(ensure_manual(&series(2, Feed::TrainingHours)).is_err());
+        assert!(ensure_manual(&series(3, Feed::Manual)).is_ok());
     }
 }

@@ -5,10 +5,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.tapas.api.models.ConnectGoogle
 import dev.tapas.api.models.GoogleApi
+import dev.tapas.api.models.GrantStatus
 import dev.tapas.api.models.Me
 import dev.tapas.api.models.Recent
 import dev.tapas.api.models.SignIn
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -88,14 +91,25 @@ class TapasViewModel(application: Application) : AndroidViewModel(application) {
         sessionToken = token
     }
 
+    /** Reloads until every connected API has finished its first sync on the server. */
     private suspend fun load() {
-        show(Screen.Home(api.me().bodyOrThrow(), api.recent().bodyOrThrow()))
+        while (true) {
+            val me = api.me().bodyOrThrow()
+            show(Screen.Home(me, api.recent().bodyOrThrow()))
+            if (me.grants.none { it.firstSyncPending }) return
+            delay(FIRST_SYNC_POLL)
+        }
     }
 
     private fun show(screen: Screen) {
         _state.update { UiState(screen) }
     }
 }
+
+private val FIRST_SYNC_POLL = 3.seconds
+
+private val GrantStatus.firstSyncPending: Boolean
+    get() = !needsConsent && syncedAt == null && syncError == null
 
 private fun GoogleApi.needsConsent(me: Me): Boolean =
     me.grants.none { it.api == this && !it.needsConsent }

@@ -18,8 +18,10 @@ fun tapasApi(sessionToken: () -> String?): DefaultApi {
 
 class SignedOutException : Exception("signed out")
 
-class ApiException(response: Response<*>) :
-    Exception("${response.code()}: ${response.errorBody()?.string().orEmpty()}")
+/** A refused request; the message is the server's own explanation, e.g. why a goal is invalid. */
+class ApiException(val code: Int, body: String) : Exception(body.ifBlank { "HTTP $code" }) {
+    constructor(response: Response<*>) : this(response.code(), response.errorBody()?.string().orEmpty())
+}
 
 /** The body of a successful response; a 401 means the session is gone. */
 fun <T> Response<T>.bodyOrThrow(): T = when {

@@ -66,8 +66,10 @@ async fn serve(config: Config) -> Result<()> {
         |path: &PathBuf| std::fs::read(path).with_context(|| format!("reading {}", path.display()));
     let client_secret = String::from_utf8(read(&config.google_web_client_secret_file)?)
         .context("the Google client secret is not UTF-8")?;
+    let store = store::Store::open(&config.database).await?;
+    store.ensure_master().await?;
     let state = api::AppState {
-        store: store::Store::open(&config.database).await?,
+        store,
         http: reqwest::Client::new(),
         google: Arc::new(WebClient {
             id: config.google_web_client_id.clone(),

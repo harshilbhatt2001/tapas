@@ -69,6 +69,11 @@ in {
 
   # Installs the debug app pointed at the local server through a USB reverse tunnel.
   scripts.phone.exec = ''
+    set -e
+    if ! adb get-state >/dev/null 2>&1; then
+      echo "no phone found: plug it in, turn on USB debugging and accept the prompt on the phone" >&2
+      exit 1
+    fi
     adb reverse tcp:8080 tcp:8080
     cd ${config.devenv.root}/android
     ./gradlew installDebug -Ptapas.url=http://localhost:8080 "$@"
